@@ -16,9 +16,6 @@ pub mod tx;
 #[cfg(feature = "std")]
 pub mod fs;
 
-#[cfg(feature = "debug")]
-pub mod debug;
-
 #[cfg(feature = "std")]
 pub(crate) const ZERO_HASH: Hash = [0; 32];
 
