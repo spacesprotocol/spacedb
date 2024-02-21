@@ -1,0 +1,23 @@
+workspace = { members = ["example"] }
+
+[package]
+name = "spacedb"
+version = "0.1.0"
+edition = "2021"
+description = "A cryptographically verifiable data store and universal accumulator for the Spaces protocol."
+repository = "https://github.com/spacesprotocol/spacedb"
+license = "Apache-2.0"
+
+[dependencies]
+libc = { version = "0.2.150", optional = true }
+bincode = { version = "2.0.0-rc.3", default-features = false, features = ["alloc"] }
+hex = { version = "0.4.3", optional = true }
+
+[dependencies.sha2]
+git = "https://github.com/risc0/RustCrypto-hashes"
+tag = "sha2-v0.10.6-risczero.0"
+default-features = false
+
+[features]
+default = ["std"]
+std = ["libc", "hex", "bincode/derive", "bincode/std"]
