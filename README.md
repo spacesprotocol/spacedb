@@ -2,7 +2,7 @@
 
 <small>Note: this project is still under active development and should be considered experimental.</small>
 
-SpaceDB is a cryptographically verifiable data store and universal accumulator for the [Spaces protocol](https://spacesprotocol.com). It's a Merkle-ized binary trie described in the [Merklix](https://blog.vermorel.com/pdf/merklix-tree-for-bitcoin-2018-07.pdf) paper and explained in detail [here](https://spacesprotocol.org/#binary-trie).
+SpaceDB is a cryptographically verifiable data store and universal accumulator for the [Spaces protocol](https://spacesprotocol.org). It's a Merkle-ized binary trie described in the [Merklix](https://blog.vermorel.com/pdf/merklix-tree-for-bitcoin-2018-07.pdf) paper and explained in detail [here](https://spacesprotocol.org/#binary-trie).
 
 
 ## Features
