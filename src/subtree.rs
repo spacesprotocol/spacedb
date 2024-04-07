@@ -56,7 +56,7 @@ impl<H: NodeHasher> SubTree<H> {
         if self.is_empty() {
             return Ok(H::hash(&[]));
         }
-        Self::hash_node(&self.root, 0)
+        Self::hash_node(&self.root)
     }
 
     #[inline(always)]
@@ -197,7 +197,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    fn hash_node(node: &SubTreeNode, depth: usize) -> Result<Hash, VerifyError> {
+    fn hash_node(node: &SubTreeNode) -> Result<Hash, VerifyError> {
         match node {
             SubTreeNode::Leaf { key, value_or_hash } => match value_or_hash {
                 ValueOrHash::Value(value) => {
@@ -211,9 +211,8 @@ impl<H: NodeHasher> SubTree<H> {
                 left,
                 right,
             } => {
-                let depth = depth + prefix.bit_len() + 1;
-                let left_hash = Self::hash_node(left, depth)?;
-                let right_hash = Self::hash_node(right, depth)?;
+                let left_hash = Self::hash_node(left)?;
+                let right_hash = Self::hash_node(right)?;
                 Ok(H::hash_internal(prefix.as_bytes(), &left_hash, &right_hash))
             }
             SubTreeNode::Hash(hash) => Ok(hash.clone()),
