@@ -382,8 +382,6 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
             self.flush()?;
         }
 
-        let config = config::standard();
-
         if node.inner.is_none() {
             if node.id != EMPTY_RECORD {
                 return Ok(node.id);
@@ -393,6 +391,7 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
 
         let size = {
             let inner = node.inner.as_mut().unwrap();
+            let config = config::standard();
             bincode::encode_into_slice(inner, &mut self.tail(), config).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::Other,
