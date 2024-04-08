@@ -407,6 +407,9 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
         };
 
         self.len += size;
+        if self.len >= SIZE {
+            self.flush()?;
+        }
         Ok(node_id)
     }
 }
