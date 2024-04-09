@@ -92,18 +92,23 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     pub fn prove_all(&mut self, keys: &[Hash]) -> Result<SubTree<H>, io::Error> {
         let mut node = self.cache.node.take().unwrap();
         if node.id == EMPTY_RECORD {
+            self.cache.node = Some(node);
             return Ok(SubTree::<H>::empty());
         }
 
         let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
         key_paths.sort();
 
-        let subtree = Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0)?;
+        let subtree = Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0);
         self.cache.node = Some(node);
-        Ok(SubTree::<H> {
-            root: subtree,
-            _marker: PhantomData::<H>,
-        })
+        if subtree.is_ok() {
+            Ok(SubTree::<H> {
+                root: subtree.unwrap(),
+                _marker: PhantomData::<H>,
+            })
+        } else {
+            Err(subtree.unwrap_err())
+        }
     }
 
     fn prove_nodes(
