@@ -118,6 +118,8 @@ impl<T: BitLength + AsRef<[u8]>> PathUtils for T {
         Direction::Left
     }
 
+    /// Returns the first differing bit of `self`, from `start` bit of `self`(inclusive).
+    /// If all bits are the same, returns None instead.
     fn split_point<S: BitLength + PathUtils>(&self, start: usize, b: S) -> Option<usize> {
         let max_bit_len = core::cmp::min(self.bit_len(), b.bit_len());
         let (src_start_byte, src_start_bit, seg_end_byte) =
