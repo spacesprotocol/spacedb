@@ -2,6 +2,8 @@
 extern crate alloc;
 
 pub mod path;
+#[cfg(test)]
+pub mod path_test;
 pub mod subtree;
 
 #[cfg(feature = "std")]

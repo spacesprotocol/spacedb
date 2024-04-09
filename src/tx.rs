@@ -361,7 +361,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         let point = current_key.split_point(0, key).unwrap();
         let prefix = PathSegment::from_path(current_key, depth, point);
 
-        let depth = depth + prefix.bit_len();
+        let depth = point;
         let node_direction = key.direction(depth);
         let current_node = Node::from_leaf(current_key, current_value);
         let node = Node::from_leaf(key, value);
