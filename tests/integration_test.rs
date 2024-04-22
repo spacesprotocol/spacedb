@@ -13,7 +13,7 @@ fn it_works_with_empty_trees() {
     assert_eq!(root, db.hash(&[]), "empty tree must return zero hash");
 
     let foo = db.hash("foo".as_bytes());
-    let subtree = snapshot.prove(&foo).unwrap();
+    let subtree = snapshot.prove(&[foo]).unwrap();
 
     assert_eq!(
         subtree.root().unwrap(),
@@ -69,7 +69,7 @@ fn it_inserts_many_items_into_tree() {
     tx.commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
-    let subtree2 = tree.prove_all(&keys).unwrap();
+    let subtree2 = tree.prove(&keys).unwrap();
 
     assert_eq!(
         subtree2.root().unwrap(),

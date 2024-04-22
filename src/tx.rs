@@ -82,11 +82,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         Ok(h)
     }
 
-    pub fn prove(&mut self, key: &Hash) -> Result<SubTree<H>> {
-        self.prove_all(&[*key])
-    }
-
-    pub fn prove_all(&mut self, keys: &[Hash]) -> Result<SubTree<H>> {
+    pub fn prove(&mut self, keys: &[Hash]) -> Result<SubTree<H>> {
         let mut node = self.cache.node.take().unwrap();
         if node.id == EMPTY_RECORD {
             self.cache.node = Some(node);
