@@ -60,7 +60,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         KeyIterator::new(self.db, self.root)
     }
 
-    pub fn get(&mut self, key: &Hash) -> Result<Vec<u8>> {
+    pub fn get(&mut self, key: &Hash) -> Result<Option<Vec<u8>>> {
         let mut node = self.cache.node.take().unwrap();
         let result = Self::get_node(&mut self.cache, &mut node, Path(key), 0);
         self.cache.node = Some(node);
@@ -206,7 +206,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         node: &'c mut Node,
         key: Path<&Hash>,
         depth: usize,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Option<Vec<u8>>> {
         let entry = cache.load_node(node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf {
@@ -214,10 +214,9 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 key: node_key,
             } => {
                 if node_key.0 == *key.0 {
-                    Ok(value.clone())
-                } else {
-                    return Err(Error::from(io::ErrorKind::NotFound))?;
+                    return Ok(Some(value.clone()))
                 }
+                return Ok(None)
             }
             NodeInner::Internal {
                 prefix,
@@ -225,7 +224,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 right,
             } => {
                 if key.split_point(depth, *prefix).is_some() {
-                    return Err(Error::from(io::ErrorKind::NotFound))?;
+                    return Ok(None)
                 }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {

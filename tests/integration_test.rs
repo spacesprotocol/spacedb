@@ -130,7 +130,7 @@ fn get_returns_error_when_key_not_exists() {
     tx.commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
-    assert_eq!(tree.get(&key.clone()).unwrap(), value);
+    assert_eq!(tree.get(&key.clone()).unwrap(), Some(value));
     let non_existing_key = db.hash(&[1]);
-    assert_eq!(tree.get(&non_existing_key.clone()).is_err(), true);
+    assert!(tree.get(&non_existing_key.clone()).unwrap().is_none());
 }
