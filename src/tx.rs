@@ -65,9 +65,9 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
 
     pub fn get(&mut self, key: &Hash) -> Result<Vec<u8>, io::Error> {
         let mut node = self.cache.node.take().unwrap();
-        let result = Self::get_node(&mut self.cache, &mut node, Path(key), 0)?;
+        let result = Self::get_node(&mut self.cache, &mut node, Path(key), 0);
         self.cache.node = Some(node);
-        Ok(result)
+        result
     }
 
     pub fn root(&mut self) -> Result<Hash, io::Error> {
@@ -92,18 +92,23 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     pub fn prove_all(&mut self, keys: &[Hash]) -> Result<SubTree<H>, io::Error> {
         let mut node = self.cache.node.take().unwrap();
         if node.id == EMPTY_RECORD {
+            self.cache.node = Some(node);
             return Ok(SubTree::<H>::empty());
         }
 
         let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
         key_paths.sort();
 
-        let subtree = Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0)?;
+        let subtree = Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0);
         self.cache.node = Some(node);
-        Ok(SubTree::<H> {
-            root: subtree,
-            _marker: PhantomData::<H>,
-        })
+        if subtree.is_ok() {
+            Ok(SubTree::<H> {
+                root: subtree.unwrap(),
+                _marker: PhantomData::<H>,
+            })
+        } else {
+            Err(subtree.unwrap_err())
+        }
     }
 
     fn prove_nodes(
@@ -207,12 +212,24 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     ) -> Result<Vec<u8>, io::Error> {
         let entry = cache.load_node(node)?;
         match entry.node.inner.as_mut().unwrap() {
-            NodeInner::Leaf { value, .. } => Ok(value.clone()),
+            NodeInner::Leaf {
+                value,
+                key: node_key,
+            } => {
+                if node_key.0 == *key.0 {
+                    Ok(value.clone())
+                } else {
+                    Err(io::ErrorKind::NotFound.into())
+                }
+            }
             NodeInner::Internal {
                 prefix,
                 left,
                 right,
             } => {
+                if key.split_point(depth, *prefix).is_some() {
+                    return Err(io::ErrorKind::NotFound.into());
+                }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
                     Direction::Right => Self::get_node(cache, right, key, depth + 1),

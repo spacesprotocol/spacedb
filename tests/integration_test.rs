@@ -1,4 +1,8 @@
-use spacedb::{db::Database, subtree::{SubTree, ValueOrHash}, NodeHasher, Sha256Hasher};
+use spacedb::{
+    db::Database,
+    subtree::{SubTree, ValueOrHash},
+    NodeHasher, Sha256Hasher,
+};
 
 #[test]
 fn it_works_with_empty_trees() {
@@ -6,11 +10,7 @@ fn it_works_with_empty_trees() {
 
     let mut snapshot = db.begin_read().unwrap();
     let root = snapshot.root().unwrap();
-    assert_eq!(
-        root,
-        db.hash(&[]),
-        "empty tree must return zero hash"
-    );
+    assert_eq!(root, db.hash(&[]), "empty tree must return zero hash");
 
     let foo = db.hash("foo".as_bytes());
     let subtree = snapshot.prove(&foo).unwrap();
@@ -117,4 +117,20 @@ fn it_should_iterate_over_tree() {
         n,
         "The number of iterated items does not match the number of inserted items."
     );
+}
+
+#[test]
+fn get_returns_error_when_key_not_exists() {
+    let db = Database::memory().unwrap();
+    let mut tx = db.begin_write().unwrap();
+    let key = db.hash(&[]);
+    let value = "some data".as_bytes().to_vec();
+
+    tx.insert(key.clone(), value.clone()).unwrap();
+    tx.commit().unwrap();
+
+    let mut tree = db.begin_read().unwrap();
+    assert_eq!(tree.get(&key.clone()).unwrap(), value);
+    let non_existing_key = db.hash(&[1]);
+    assert_eq!(tree.get(&non_existing_key.clone()).is_err(), true);
 }
