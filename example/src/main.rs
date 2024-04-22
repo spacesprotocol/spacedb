@@ -1,6 +1,6 @@
-use spacedb::db::Database;
+use spacedb::{Result, db::Database };
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> Result<()> {
     let db = Database::memory()?;
 
     // Insert some data

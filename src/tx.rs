@@ -1,7 +1,4 @@
-use crate::{
-    path::{Direction, Path},
-    subtree::ValueOrHash,
-};
+use crate::{Result, path::{Direction, Path}, subtree::ValueOrHash, Error};
 
 use bincode::config;
 use core::marker::PhantomData;
@@ -63,14 +60,14 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         KeyIterator::new(self.db, self.root)
     }
 
-    pub fn get(&mut self, key: &Hash) -> Result<Vec<u8>, io::Error> {
+    pub fn get(&mut self, key: &Hash) -> Result<Vec<u8>> {
         let mut node = self.cache.node.take().unwrap();
         let result = Self::get_node(&mut self.cache, &mut node, Path(key), 0);
         self.cache.node = Some(node);
         result
     }
 
-    pub fn root(&mut self) -> Result<Hash, io::Error> {
+    pub fn root(&mut self) -> Result<Hash> {
         let mut n = self.cache.node.take().unwrap();
         if n.id == EMPTY_RECORD {
             self.cache.node = Some(n);
@@ -85,11 +82,11 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         Ok(h)
     }
 
-    pub fn prove(&mut self, key: &Hash) -> Result<SubTree<H>, io::Error> {
+    pub fn prove(&mut self, key: &Hash) -> Result<SubTree<H>> {
         self.prove_all(&[*key])
     }
 
-    pub fn prove_all(&mut self, keys: &[Hash]) -> Result<SubTree<H>, io::Error> {
+    pub fn prove_all(&mut self, keys: &[Hash]) -> Result<SubTree<H>> {
         let mut node = self.cache.node.take().unwrap();
         if node.id == EMPTY_RECORD {
             self.cache.node = Some(node);
@@ -116,7 +113,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         node: &mut Node,
         keys: &[Path<&Hash>],
         depth: usize,
-    ) -> Result<SubTreeNode, io::Error> {
+    ) -> Result<SubTreeNode> {
         let entry = cache.load_node(node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf {
@@ -177,7 +174,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     fn load_hash<'c>(
         cache: &mut Cache<H>,
         node: &'c mut Node,
-    ) -> Result<CacheEntry<'c>, io::Error> {
+    ) -> Result<CacheEntry<'c>> {
         if node.hash_cache.is_some() {
             return Ok(CacheEntry::new(node, false));
         }
@@ -209,7 +206,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         node: &'c mut Node,
         key: Path<&Hash>,
         depth: usize,
-    ) -> Result<Vec<u8>, io::Error> {
+    ) -> Result<Vec<u8>> {
         let entry = cache.load_node(node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf {
@@ -219,7 +216,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 if node_key.0 == *key.0 {
                     Ok(value.clone())
                 } else {
-                    Err(io::ErrorKind::NotFound.into())
+                    return Err(Error::from(io::ErrorKind::NotFound))?;
                 }
             }
             NodeInner::Internal {
@@ -228,7 +225,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 right,
             } => {
                 if key.split_point(depth, *prefix).is_some() {
-                    return Err(io::ErrorKind::NotFound.into());
+                    return Err(Error::from(io::ErrorKind::NotFound))?;
                 }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
@@ -256,7 +253,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         }
     }
 
-    pub fn insert(&mut self, key: Hash, value: Vec<u8>) -> Result<(), io::Error> {
+    pub fn insert(&mut self, key: Hash, value: Vec<u8>) -> Result<()> {
         if self.state.is_none() {
             self.state = Some(Node::from_leaf(Path(key), value));
             return Ok(());
@@ -274,12 +271,12 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         key: Path<Hash>,
         value: Vec<u8>,
         depth: usize,
-    ) -> Result<Node, io::Error> {
+    ) -> Result<Node> {
         let inner = match node.inner {
             Some(node) => node,
             None => {
                 if node.id == EMPTY_RECORD {
-                    return Err(io::Error::new(io::ErrorKind::NotFound, "Node not found"));
+                    return Err(io::ErrorKind::NotFound.into());
                 }
                 let raw = self.db.file.read(node.id.offset, node.id.size as usize)?;
                 let config = config::standard();
@@ -311,7 +308,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         key: Path<Hash>,
         value: Vec<u8>,
         depth: usize,
-    ) -> io::Result<Node> {
+    ) -> Result<Node> {
         let point = key.split_point(depth, prefix);
         if point.is_none() {
             let depth = depth + prefix.bit_len();
@@ -363,7 +360,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         key: Path<Hash>,
         value: Vec<u8>,
         depth: usize,
-    ) -> io::Result<Node> {
+    ) -> Result<Node> {
         // Empty root: leaf becomes root
         if current_key == Path(ZERO_HASH) {
             return Ok(Node::from_leaf(key, value));
@@ -395,7 +392,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         &mut self,
         buf: &mut WriteBuffer<BUFFER_SIZE>,
         node: &mut Node,
-    ) -> Result<Record, io::Error> {
+    ) -> Result<Record> {
         match &mut node.inner {
             Some(NodeInner::Leaf { .. }) => {
                 node.id = buf.write_node(node)?;
@@ -409,13 +406,13 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
                 if node.id != EMPTY_RECORD {
                     return Ok(node.id);
                 }
-                return Err(io::Error::new(io::ErrorKind::NotFound, "Node not found"));
+                return Err(Error::from(io::ErrorKind::NotFound));
             }
         }
 
         Ok(node.id)
     }
-    pub fn commit(mut self) -> Result<(), io::Error> {
+    pub fn commit(mut self) -> Result<()> {
         if self.state.is_none() {
             return Ok(());
         }
@@ -465,7 +462,7 @@ impl<'db, H: NodeHasher> KeyIterator<'db, H> {
 }
 
 impl<'db, H: NodeHasher> Iterator for KeyIterator<'db, H> {
-    type Item = Result<(Hash, Vec<u8>), io::Error>;
+    type Item = Result<(Hash, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let record = self.stack.pop()?;
@@ -478,7 +475,7 @@ impl<'db, H: NodeHasher> Iterator for KeyIterator<'db, H> {
                     self.next()
                 }
             },
-            Err(e) => Some(Err(e)),
+            Err(e) => Some(Err(Error::from(e))),
         }
     }
 }
@@ -511,7 +508,7 @@ impl<'db, H: NodeHasher> Cache<'db, H> {
         self.len > self.max_len
     }
 
-    fn load_node<'c>(&mut self, node: &'c mut Node) -> Result<CacheEntry<'c>, io::Error> {
+    fn load_node<'c>(&mut self, node: &'c mut Node) -> Result<CacheEntry<'c>> {
         if node.inner.is_some() {
             return Ok(CacheEntry { node, clean: false });
         }

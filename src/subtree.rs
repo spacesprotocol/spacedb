@@ -1,7 +1,4 @@
-use crate::{
-    path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils},
-    Hash, NodeHasher,
-};
+use crate::{Result, path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils}, Hash, NodeHasher, VerifyError};
 
 use alloc::{boxed::Box, vec, vec::Vec};
 use bincode::{
@@ -38,11 +35,6 @@ pub enum ValueOrHash {
     Hash(Hash),
 }
 
-#[derive(Debug)]
-pub enum VerifyError {
-    KeyExists,
-    IncompleteProof,
-}
 
 impl<H: NodeHasher> SubTree<H> {
     pub fn empty() -> Self {
@@ -52,7 +44,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    pub fn root(&self) -> Result<Hash, VerifyError> {
+    pub fn root(&self) -> Result<Hash> {
         if self.is_empty() {
             return Ok(H::hash(&[]));
         }
@@ -72,7 +64,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    pub fn insert(&mut self, key: Hash, value_or_hash: ValueOrHash) -> Result<(), VerifyError> {
+    pub fn insert(&mut self, key: Hash, value_or_hash: ValueOrHash) -> Result<()> {
         if self.is_empty() {
             self.root = SubTreeNode::Leaf {
                 key: Path(key),
@@ -89,7 +81,7 @@ impl<H: NodeHasher> SubTree<H> {
                 SubTreeNode::Leaf { key: node_key, .. } => {
                     // Same key
                     if key.0 == node_key.0 {
-                        return Err(VerifyError::KeyExists);
+                        return Err(VerifyError::KeyExists.into());
                     }
 
                     //  A split point must exist: compress common path into an internal node
@@ -153,7 +145,7 @@ impl<H: NodeHasher> SubTree<H> {
                     return Ok(());
                 }
                 SubTreeNode::Hash(_hash) => {
-                    return Err(VerifyError::IncompleteProof);
+                    return Err(VerifyError::IncompleteProof.into());
                 }
                 SubTreeNode::None => {
                     unreachable!("Unexpected None node")
@@ -162,7 +154,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    pub fn contains(&self, key: &Hash) -> Result<bool, VerifyError> {
+    pub fn contains(&self, key: &Hash) -> Result<bool> {
         if self.is_empty() {
             return Ok(false);
         }
@@ -188,7 +180,7 @@ impl<H: NodeHasher> SubTree<H> {
                     depth += 1;
                 }
                 SubTreeNode::Hash(_hash) => {
-                    return Err(VerifyError::IncompleteProof);
+                    return Err(VerifyError::IncompleteProof.into());
                 }
                 SubTreeNode::None => {
                     unreachable!("None should not be inserted")
@@ -197,7 +189,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    fn hash_node(node: &SubTreeNode) -> Result<Hash, VerifyError> {
+    fn hash_node(node: &SubTreeNode) -> Result<Hash> {
         match node {
             SubTreeNode::Leaf { key, value_or_hash } => match value_or_hash {
                 ValueOrHash::Value(value) => {
@@ -242,13 +234,13 @@ impl<H: NodeHasher> SubTree<H> {
 }
 
 impl<H: NodeHasher> Encode for SubTree<H> {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
         Encode::encode(&self.root, encoder)
     }
 }
 
 impl<H: NodeHasher> Decode for SubTree<H> {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+    fn decode<D: Decoder>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
         let root = Decode::decode(decoder)?;
         Ok(Self {
             root,
@@ -258,7 +250,7 @@ impl<H: NodeHasher> Decode for SubTree<H> {
 }
 
 impl Encode for SubTreeNode {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
         match self {
             SubTreeNode::Leaf { key, value_or_hash } => {
                 Encode::encode(&0u8, encoder)?;
@@ -288,7 +280,7 @@ impl Encode for SubTreeNode {
 }
 
 impl Decode for SubTreeNode {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+    fn decode<D: Decoder>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
         let tag: u8 = Decode::decode(decoder)?;
         match tag {
             0 => {
@@ -320,7 +312,7 @@ impl Decode for SubTreeNode {
 impl_borrow_decode!(SubTreeNode);
 
 impl Encode for ValueOrHash {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
+    fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
         match self {
             ValueOrHash::Value(value) => {
                 Encode::encode(&0u8, encoder)?;
@@ -336,7 +328,7 @@ impl Encode for ValueOrHash {
 }
 
 impl Decode for ValueOrHash {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+    fn decode<D: Decoder>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
         let tag: u8 = Decode::decode(decoder)?;
         match tag {
             0 => {
