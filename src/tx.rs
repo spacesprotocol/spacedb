@@ -21,6 +21,12 @@ use crate::{
 
 const BUFFER_SIZE: usize = 16 * 64 * 1024;
 
+#[derive(Copy, Clone, PartialEq)]
+pub enum ProofType {
+    Standard,
+    Extended,
+}
+
 pub struct WriteTransaction<'db, H: NodeHasher> {
     pub db: &'db Database<H>,
     pub(crate) state: Option<Node>,
@@ -44,6 +50,11 @@ pub struct Cache<'db, H: NodeHasher> {
 struct CacheEntry<'n> {
     node: &'n mut Node,
     clean: bool,
+}
+
+struct SubTreeNodeInfo {
+    node: SubTreeNode,
+    value_node: bool
 }
 
 impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
@@ -75,32 +86,34 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         }
 
         let h = {
-            let entry = Self::load_hash(&mut self.cache, &mut n)?;
+            let entry = Self::hash_node(&mut self.cache, &mut n)?;
             entry.node.hash_cache.clone().unwrap()
         };
         self.cache.node = Some(n);
         Ok(h)
     }
 
-    pub fn prove(&mut self, keys: &[Hash]) -> Result<SubTree<H>> {
+    pub fn prove(&mut self, keys: &[Hash], proof_type: ProofType) -> Result<SubTree<H>> {
         let mut node = self.cache.node.take().unwrap();
         if node.id == EMPTY_RECORD {
-            self.cache.node = Some(node);
             return Ok(SubTree::<H>::empty());
         }
 
         let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
         key_paths.sort();
 
-        let subtree = Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0);
-        self.cache.node = Some(node);
-        if subtree.is_ok() {
-            Ok(SubTree::<H> {
-                root: subtree.unwrap(),
-                _marker: PhantomData::<H>,
-            })
-        } else {
-            Err(subtree.unwrap_err())
+        match Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0, proof_type) {
+            Ok(info) => {
+                self.cache.node = Some(node);
+                Ok(SubTree::<H> {
+                    root: info.node,
+                    _marker: PhantomData::<H>,
+                })
+            }
+            Err(e) => {
+                self.cache.node = Some(node);
+                Err(e)
+            }
         }
     }
 
@@ -109,7 +122,8 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         node: &mut Node,
         keys: &[Path<&Hash>],
         depth: usize,
-    ) -> Result<SubTreeNode> {
+        proof_type: ProofType,
+    ) -> Result<SubTreeNodeInfo> {
         let entry = cache.load_node(node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf {
@@ -122,9 +136,12 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 } else {
                     ValueOrHash::Hash(H::hash(value))
                 };
-                Ok(SubTreeNode::Leaf {
-                    key: node_key.clone(),
-                    value_or_hash,
+                Ok(SubTreeNodeInfo {
+                    node: SubTreeNode::Leaf {
+                        key: node_key.clone(),
+                        value_or_hash,
+                    },
+                    value_node: include_value
                 })
             }
             NodeInner::Internal {
@@ -142,32 +159,65 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 let split = keys.partition_point(|key| key.direction(depth) == Direction::Left);
                 let (left_keys, right_keys) = keys.split_at(split);
 
-                let left_subtree = if left_keys.is_empty() {
-                    let left_entry = Self::load_hash(cache, left)?;
+                let mut left_subtree = if left_keys.is_empty() { None } else {
+                    Some(Self::prove_nodes(cache, left, left_keys, depth + 1, proof_type)?)
+                };
+                let mut right_subtree = if right_keys.is_empty() { None } else {
+                    Some(Self::prove_nodes(cache, right, right_keys, depth + 1, proof_type)?)
+                };
+
+                // Include extended hash of the sibling if its subtree isn't already part of the proof
+                if proof_type == ProofType::Extended && left_subtree.is_none() &&
+                    right_subtree.is_some() && right_subtree.as_ref().unwrap().value_node {
+                    left_subtree = Some(SubTreeNodeInfo {
+                        node: Self::hash_node_extended(cache, left)?,
+                        value_node: false
+                    })
+                }
+                if proof_type == ProofType::Extended && right_subtree.is_none() &&
+                    left_subtree.is_some() && left_subtree.as_ref().unwrap().value_node {
+                    right_subtree = Some(SubTreeNodeInfo {
+                        node: Self::hash_node_extended(cache, right)?,
+                        value_node: false
+                    })
+                }
+
+                // If extended hashes aren't needed, include basic ones
+                if left_subtree.is_none() {
+                    let left_entry = Self::hash_node(cache, left)?;
                     let left_hash = left_entry.node.hash_cache.clone().unwrap();
-                    SubTreeNode::Hash(left_hash)
-                } else {
-                    Self::prove_nodes(cache, left, left_keys, depth + 1)?
-                };
-
-                let right_subtree = if right_keys.is_empty() {
-                    let right_entry = Self::load_hash(cache, right)?;
+                    left_subtree = Some(SubTreeNodeInfo {
+                        node: SubTreeNode::Hash(left_hash),
+                        value_node: false
+                    });
+                }
+                if right_subtree.is_none() {
+                    let right_entry = Self::hash_node(cache, right)?;
                     let right_hash = right_entry.node.hash_cache.clone().unwrap();
-                    SubTreeNode::Hash(right_hash)
-                } else {
-                    Self::prove_nodes(cache, right, right_keys, depth + 1)?
-                };
+                    right_subtree = Some(SubTreeNodeInfo {
+                        node: SubTreeNode::Hash(right_hash),
+                        value_node: false
+                    });
+                }
 
-                Ok(SubTreeNode::Internal {
-                    prefix: prefix.clone(),
-                    left: Box::new(left_subtree),
-                    right: Box::new(right_subtree),
+                // if left and right subtrees are value leafs, we need to include the sibling of this node
+                let value_node = left_subtree.as_ref().unwrap().value_node &&
+                    right_subtree.as_ref().unwrap().value_node;
+
+                Ok(SubTreeNodeInfo {
+                    node: SubTreeNode::Internal {
+                        prefix: prefix.clone(),
+                        left: Box::new(left_subtree.unwrap().node),
+                        right: Box::new(right_subtree.unwrap().node),
+                    },
+                    value_node
                 })
             }
         }
     }
 
-    fn load_hash<'c>(
+
+    fn hash_node<'c>(
         cache: &mut Cache<H>,
         node: &'c mut Node,
     ) -> Result<CacheEntry<'c>> {
@@ -186,15 +236,51 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 left,
                 right,
             } => {
-                let left_entry = Self::load_hash(cache, left)?;
+                let left_entry = Self::hash_node(cache, left)?;
                 let left_hash = left_entry.node.hash_cache.as_ref().unwrap();
-                let right_entry = Self::load_hash(cache, right)?;
+                let right_entry = Self::hash_node(cache, right)?;
                 let right_hash = right_entry.node.hash_cache.as_ref().unwrap();
                 entry.node.hash_cache =
                     Some(H::hash_internal(prefix.as_bytes(), left_hash, right_hash));
             }
         }
         Ok(entry)
+    }
+
+    /// Creates an extended hash of a node
+    /// For internal nodes, it would be the prefix value, left and right hashes.
+    /// For leaf nodes, it's the key and value hashes.
+    ///
+    /// Note: This is different from regular hashing as it converts a [Node] into either
+    /// a [SubTreeNode::Internal] or [SubTreeNode::Leaf]
+    /// while `hash_node` converts any [Node] into a [SubTreeNode::Hash]
+    fn hash_node_extended(
+        cache: &mut Cache<H>,
+        node: &mut Node,
+    ) -> Result<SubTreeNode> {
+        let entry = cache.load_node(node)?;
+        match entry.node.inner.as_mut().unwrap() {
+            NodeInner::Leaf { key, value } => {
+                let hash = H::hash(value);
+                Ok(SubTreeNode::Leaf {
+                    key: key.clone(),
+                    value_or_hash: ValueOrHash::Hash(hash),
+                })
+            }
+            NodeInner::Internal {
+                prefix,
+                left,
+                right,
+            } => {
+                let left_hash = Self::hash_node(cache, left)?.node.hash_cache.as_ref().unwrap().clone();
+                let right_hash = Self::hash_node(cache, right)?.node.hash_cache.as_ref().unwrap().clone();
+                Ok(SubTreeNode::Internal {
+                    prefix: prefix.clone(),
+                    left: Box::new(SubTreeNode::Hash(left_hash)),
+                    right: Box::new(SubTreeNode::Hash(right_hash)),
+                })
+            }
+        }
     }
 
     fn get_node<'c>(
@@ -523,5 +609,49 @@ impl<'db, H: NodeHasher> Cache<'db, H> {
             node,
             clean: is_full,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::Database;
+    use crate::subtree::SubTreeNode;
+    use crate::tx::ProofType;
+
+    #[test]
+    fn test_extended_proofs() {
+        let db = Database::memory().unwrap();
+        let mut tx = db.begin_write().unwrap();
+        tx.insert([0b1000_0000u8; 32], vec![1]).unwrap();
+        tx.insert([0b1100_0000u8; 32], vec![2]).unwrap();
+        tx.insert([0b0000_0000u8; 32], vec![3]).unwrap();
+        tx.commit().unwrap();
+
+        let mut snapshot = db.begin_read().unwrap();
+        let standard_subtree = snapshot.prove(&[[0u8;32]], ProofType::Standard).unwrap();
+
+        match standard_subtree.root {
+            SubTreeNode::Internal { left, right, .. } => {
+                assert!(left.is_value_leaf(), "expected a value leaf on left");
+                assert!(matches!(*right, SubTreeNode::Hash(_)), "expected a hash node on the right");
+            }
+            _ => panic!("invalid result")
+        }
+
+        let extended_subtree = snapshot.prove(&[[0u8;32]], ProofType::Extended).unwrap();
+        match extended_subtree.root {
+            SubTreeNode::Internal { left, right, .. } => {
+                assert!(left.is_value_leaf(), "expected a value leaf on left");
+                // Extended proof includes the sibling with terminal child hashes if any
+                match *right {
+                    SubTreeNode::Internal { left: left_left, right :left_right, .. } => {
+                        assert!(matches!(*left_left, SubTreeNode::Hash(_)), "expected a hash node");
+                        assert!(matches!(*left_right, SubTreeNode::Hash(_)), "expected a hash node");
+                    }
+                    _ => panic!("expected internal node")
+                }
+            }
+            _ => panic!("invalid result")
+        }
     }
 }

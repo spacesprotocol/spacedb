@@ -233,6 +233,12 @@ impl<H: NodeHasher> SubTree<H> {
     }
 }
 
+impl SubTreeNode {
+    pub fn is_value_leaf(&self) -> bool {
+        matches!(self, SubTreeNode::Leaf {  value_or_hash: ValueOrHash::Value(_), ..})
+    }
+}
+
 impl<H: NodeHasher> Encode for SubTree<H> {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
         Encode::encode(&self.root, encoder)
