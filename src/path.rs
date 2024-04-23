@@ -97,6 +97,24 @@ impl<T: AsMut<[u8]>> PathSegment<T> {
         }
     }
 
+    /// Extend from another path segment
+    pub fn extend<A: BitLength + PathUtils>(&mut self, other: A) {
+        let inner = other.inner();
+
+        let mut remaining_bits = other.bit_len();
+        let mut index = 0;
+
+        while remaining_bits >= 8 {
+            self.extend_from_byte(inner[index], 8);
+            remaining_bits -= 8;
+            index += 1;
+        }
+
+        if remaining_bits > 0 {
+            self.extend_from_byte(inner[index], remaining_bits as u8);
+        }
+    }
+
     /// Extends the current path with bits from a single byte.
     ///
     /// This function takes a byte `bits` and a length `len` and extends the current path with the specified
