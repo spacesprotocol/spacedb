@@ -45,7 +45,7 @@ let keys_to_prove: Vec<_> = (0..10)
     .collect();
 
 // Reveal relevant nodes needed to prove the specified set of keys
-let mut subtree = snapshot.prove(&keys_to_prove)?;
+let mut subtree = snapshot.prove(&keys_to_prove, ProofType::Standard)?;
 
 // Will have the exact same root as the snapshot
 println!("Subtree root: {}", hex::encode(subtree.root().unwrap()));

@@ -1,4 +1,5 @@
 use spacedb::{Result, db::Database };
+use spacedb::tx::ProofType;
 
 fn main() -> Result<()> {
     let db = Database::memory()?;
@@ -25,7 +26,7 @@ fn main() -> Result<()> {
         .collect();
 
     // reveal the relevant nodes needed to prove the specified set of keys
-    let subtree = snapshot.prove(&keys_to_prove)?;
+    let subtree = snapshot.prove(&keys_to_prove, ProofType::Standard)?;
 
     // Will have the exact same root as the snapshot
     println!("Subtree root: {}", hex::encode(subtree.root().unwrap()));
