@@ -346,6 +346,16 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         Ok(())
     }
 
+    pub fn delete(&mut self, key: Hash) -> Result<()> {
+        if self.state.is_none() {
+            return Ok(());
+        }
+
+        let state = self.state.take().unwrap();
+        self.state = self.delete_node(state, Path(key), 0)?;
+        Ok(())
+    }
+
     fn insert_into_node(
         &mut self,
         node: Node,
@@ -353,20 +363,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         value: Vec<u8>,
         depth: usize,
     ) -> Result<Node> {
-        let inner = match node.inner {
-            Some(node) => node,
-            None => {
-                if node.id == EMPTY_RECORD {
-                    return Err(io::ErrorKind::NotFound.into());
-                }
-                let raw = self.db.file.read(node.id.offset, node.id.size as usize)?;
-                let config = config::standard();
-                let (inner, _): (NodeInner, usize) =
-                    bincode::decode_from_slice(&raw, config).unwrap();
-                inner
-            }
-        };
-
+        let inner = self.read_inner(node)?;
         match inner {
             NodeInner::Leaf {
                 key: node_key,
@@ -467,6 +464,113 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         };
 
         Ok(Node::from_internal(prefix, Box::new(left), Box::new(right)))
+    }
+
+    fn delete_node(
+        &mut self,
+        node: Node,
+        key: Path<Hash>,
+        depth: usize,
+    ) -> Result<Option<Node>> {
+        let inner = self.read_inner(node)?;
+        return match inner {
+            NodeInner::Leaf {
+                key: node_key, ..
+            } => {
+                if node_key != key {
+                    return Err(io::ErrorKind::NotFound.into());
+                }
+                Ok(None)
+            }
+            NodeInner::Internal {
+                prefix,
+                left,
+                right,
+            } => {
+                let depth = depth + prefix.bit_len();
+                // Traverse further based on the direction
+                match key.direction(depth) {
+                    Direction::Right => {
+                        let right_subtree = self.delete_node(*right, key, depth + 1)?;
+                        match right_subtree {
+                            None => {
+                                // Right subtree was deleted, move left subtree up
+                                let left_subtree = self.read_inner(*left)?;
+                                Ok(Some(self.lift_node(prefix, left_subtree, Direction::Left)))
+                            }
+                            Some(right_subtree) => {
+                                Ok(Some(
+                                    Node::from_internal(prefix, left, Box::new(right_subtree))
+                                ))
+                            }
+                        }
+                    }
+                    Direction::Left => {
+                        let left_subtree = self.delete_node(*left, key, depth + 1)?;
+                        return match left_subtree {
+                            None => {
+                                // Left subtree was deleted, move right subtree up
+                                let right_subtree = self.read_inner(*right)?;
+                                Ok(Some(self.lift_node(prefix, right_subtree, Direction::Right)))
+                            }
+                            Some(left_subtree) => {
+                                Ok(Some(
+                                    Node::from_internal(prefix, Box::new(left_subtree), right)
+                                ))
+                            }
+                        };
+                    }
+                }
+            }
+        };
+    }
+
+    #[inline(always)]
+    fn lift_node(
+        &self,
+        mut parent_prefix: PathSegment<PathSegmentInner>,
+        node: NodeInner,
+        direction: Direction,
+    ) -> Node {
+        match node {
+            NodeInner::Leaf { key: leaf_key, value: leaf_value } => {
+                Node::from_leaf(leaf_key, leaf_value)
+            }
+            NodeInner::Internal {
+                prefix:
+                child_prefix,
+                left: child_left,
+                right: child_right
+            } => {
+
+                // Since this node is being lifted one level append a single bit
+                // based on its direction
+                match direction {
+                    Direction::Left => parent_prefix.extend_from_byte(0, 1),
+                    Direction::Right => parent_prefix.extend_from_byte(0b1000_0000, 1)
+                }
+
+                // Extend the parent's prefix with the node prefix being lifted
+                parent_prefix.extend(child_prefix);
+                Node::from_internal(parent_prefix, child_left, child_right)
+            }
+        }
+    }
+
+    fn read_inner(&self, node: Node) -> Result<NodeInner> {
+        Ok(match node.inner {
+            Some(node) => node,
+            None => {
+                if node.id == EMPTY_RECORD {
+                    return Err(io::Error::new(io::ErrorKind::NotFound, "Node not found").into());
+                }
+                let raw = self.db.file.read(node.id.offset, node.id.size as usize)?;
+                let config = config::standard();
+                let (inner, _): (NodeInner, usize) =
+                    bincode::decode_from_slice(&raw, config).unwrap();
+                inner
+            }
+        })
     }
 
     fn write_all(
