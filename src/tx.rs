@@ -16,7 +16,6 @@ use crate::{db::DatabaseHeader, fs::WriteBuffer};
 
 use crate::{
     path::{PathSegment, PathSegmentInner},
-    ZERO_HASH,
 };
 
 const BUFFER_SIZE: usize = 16 * 64 * 1024;
@@ -439,11 +438,6 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         value: Vec<u8>,
         depth: usize,
     ) -> Result<Node> {
-        // Empty root: leaf becomes root
-        if current_key == Path(ZERO_HASH) {
-            return Ok(Node::from_leaf(key, value));
-        }
-
         // Same key: update value
         if current_key == key {
             return Ok(Node::from_leaf(key, value));

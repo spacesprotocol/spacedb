@@ -1,6 +1,10 @@
-use crate::{Result, path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils}, Hash, NodeHasher, VerifyError};
+use crate::{
+    path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils},
+    Result, Hash, NodeHasher, VerifyError
+};
 
 use alloc::{boxed::Box, vec, vec::Vec};
+use std::marker::PhantomData;
 use bincode::{
     de::Decoder,
     enc::Encoder,
@@ -11,7 +15,7 @@ use bincode::{
 #[derive(Clone, Debug)]
 pub struct SubTree<H: NodeHasher> {
     pub root: SubTreeNode,
-    pub _marker: core::marker::PhantomData<H>,
+    pub _marker: PhantomData<H>,
 }
 
 #[derive(Clone, Debug)]
@@ -148,7 +152,7 @@ impl<H: NodeHasher> SubTree<H> {
                     return Err(VerifyError::IncompleteProof.into());
                 }
                 SubTreeNode::None => {
-                    unreachable!("Unexpected None node")
+                    return Err(VerifyError::IncompleteProof.into());
                 }
             }
         }
@@ -183,7 +187,7 @@ impl<H: NodeHasher> SubTree<H> {
                     return Err(VerifyError::IncompleteProof.into());
                 }
                 SubTreeNode::None => {
-                    unreachable!("None should not be inserted")
+                    return Err(VerifyError::IncompleteProof.into());
                 }
             }
         }
@@ -209,8 +213,101 @@ impl<H: NodeHasher> SubTree<H> {
             }
             SubTreeNode::Hash(hash) => Ok(hash.clone()),
             SubTreeNode::None => {
-                unreachable!("None should not be inserted")
+                return Err(VerifyError::IncompleteProof.into())
             }
+        }
+    }
+
+    fn lift_node(mut parent_prefix: PathSegment<PathSegmentInner>, node: SubTreeNode, direction: Direction) -> Result<SubTreeNode> {
+        match node {
+            SubTreeNode::Leaf { .. } => {
+                Ok(node.clone())
+            }
+            SubTreeNode::Internal { prefix, left, right } => {
+                match direction {
+                    Direction::Left => parent_prefix.extend_from_byte(0, 1),
+                    Direction::Right => parent_prefix.extend_from_byte(0b1000_0000, 1)
+                }
+                parent_prefix.extend(prefix.clone());
+
+                Ok(SubTreeNode::Internal {
+                    prefix: parent_prefix,
+                    left,
+                    right,
+                })
+            }
+            SubTreeNode::Hash(_) => {
+                 Err(VerifyError::IncompleteProof.into())
+            }
+            SubTreeNode::None => {
+                 Err(VerifyError::IncompleteProof.into())
+            }
+        }
+    }
+
+    pub fn delete(self, key: &Hash) -> Result<SubTree<H>> {
+        let key = Path(key);
+        Ok(SubTree::<H> {
+            root: Self::delete_node(self.root, &key, 0)?,
+            _marker: PhantomData::<H>,
+        })
+    }
+
+    fn delete_node(node:  SubTreeNode, key: &Path<&Hash>, depth: usize) -> Result<SubTreeNode> {
+        match node {
+            SubTreeNode::Leaf { key : node_key, .. } => {
+                if node_key.0 != *key.0 {
+                    return Err(VerifyError::KeyNotFound.into());
+                }
+                Ok(SubTreeNode::None)
+            }
+            SubTreeNode::Internal { prefix, left, right } => {
+                let depth = depth + prefix.bit_len();
+                match key.direction(depth) {
+                    Direction::Right => {
+                        let right_subtree = Self::delete_node(*right, key, depth + 1)?;
+                        match right_subtree {
+                            SubTreeNode::None => {
+                                // Right subtree was deleted, move left subtree up
+                                Ok(Self::lift_node(prefix, *left, Direction::Left)?)
+                            },
+                            SubTreeNode::Hash(_) => {
+                                return Err(VerifyError::IncompleteProof.into())
+                            },
+                            other  => {
+                                // Right node was updated
+                                Ok(SubTreeNode::Internal {
+                                    prefix,
+                                    left,
+                                    right: Box::new(other),
+                                })
+                            }
+                        }
+                    }
+                    Direction::Left => {
+                        let left_subtree = Self::delete_node(*left, key, depth + 1)?;
+                        match left_subtree {
+                            SubTreeNode::None => {
+                                // left subtree was deleted, move right subtree up
+                                Ok(Self::lift_node(prefix, *right, Direction::Right)?)
+                            },
+                            SubTreeNode::Hash(_) => {
+                                return Err(VerifyError::IncompleteProof.into())
+                            },
+                            other  => {
+                                // left node was updated
+                                Ok(SubTreeNode::Internal {
+                                    prefix,
+                                    right,
+                                    left: Box::new(other),
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+            SubTreeNode::Hash(_) => Err(VerifyError::IncompleteProof.into()),
+            SubTreeNode::None => Err(VerifyError::KeyNotFound.into()),
         }
     }
 
@@ -278,7 +375,7 @@ impl Encode for SubTreeNode {
                 Encode::encode(hash, encoder)?;
             }
             SubTreeNode::None => {
-                unreachable!("None should not be encoded")
+                unreachable!("cannot encode a none node")
             }
         }
         Ok(())

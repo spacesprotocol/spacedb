@@ -16,9 +16,6 @@ pub mod tx;
 #[cfg(feature = "std")]
 pub mod fs;
 
-#[cfg(feature = "std")]
-pub(crate) const ZERO_HASH: Hash = [0; 32];
-
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug)]
@@ -32,6 +29,7 @@ pub enum Error {
 pub enum VerifyError {
     KeyExists,
     IncompleteProof,
+    KeyNotFound,
 }
 
 use core::marker::PhantomData;
