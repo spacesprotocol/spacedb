@@ -1,4 +1,5 @@
 use crate::{
+    Result,
     fs::{FileBackend, StorageBackend},
     node::NodeInner,
     tx::{ReadTransaction, WriteTransaction},
@@ -68,7 +69,7 @@ impl DatabaseHeader {
         raw
     }
 
-    fn from_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+    fn from_bytes(bytes: &[u8]) -> core::result::Result<Self, DecodeError> {
         // calc checksum
         let mut hasher = Sha256::new();
         hasher.update(&bytes[..60]);
@@ -97,7 +98,7 @@ impl DatabaseHeader {
 }
 
 impl Database<Sha256Hasher> {
-    pub fn open(path: &str) -> Result<Self, io::Error> {
+    pub fn open(path: &str) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -108,7 +109,7 @@ impl Database<Sha256Hasher> {
         Self::new(Box::new(FileBackend::new(file)?), config)
     }
 
-    pub fn memory() -> Result<Self, io::Error> {
+    pub fn memory() -> Result<Self> {
         let file = Box::new(crate::fs::MemoryBackend::new());
         let config = Configuration::standard();
         Self::new(file, config)
@@ -116,7 +117,7 @@ impl Database<Sha256Hasher> {
 }
 
 impl<H: NodeHasher> Database<H> {
-    pub fn new(file: Box<dyn StorageBackend>, config: Configuration<H>) -> Result<Self, io::Error> {
+    pub fn new(file: Box<dyn StorageBackend>, config: Configuration<H>) -> Result<Self> {
         let header;
         let mut has_header = false;
 
@@ -152,7 +153,7 @@ impl<H: NodeHasher> Database<H> {
 
     pub(crate) fn recover_header(
         file: &Box<dyn StorageBackend>,
-    ) -> Result<(DatabaseHeader, bool), io::Error> {
+    ) -> Result<(DatabaseHeader, bool)> {
         // Attempt to read from slot 0
         let bytes = file.read(0, 64)?;
         if let Ok(header) = DatabaseHeader::from_bytes(&bytes) {
@@ -167,7 +168,7 @@ impl<H: NodeHasher> Database<H> {
         Ok((header, true))
     }
 
-    pub(crate) fn write_header(&self, hdr: &DatabaseHeader) -> Result<(), io::Error> {
+    pub(crate) fn write_header(&self, hdr: &DatabaseHeader) -> Result<()> {
         // Database reserves first two pages for the metadata
         // The first page slot 0 contains the header
         // Second page slot 1 contains a backup of the header
@@ -189,24 +190,24 @@ impl<H: NodeHasher> Database<H> {
         Ok(())
     }
 
-    fn read_save_point(&self, record: Record) -> Result<SavePoint, io::Error> {
+    fn read_save_point(&self, record: Record) -> Result<SavePoint> {
         let raw = self.file.read(record.offset, record.size as usize)?;
         let (save_point, _) = bincode::decode_from_slice(&raw, config::standard())
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         Ok(save_point)
     }
 
-    pub fn begin_write(&self) -> Result<WriteTransaction<H>, io::Error> {
+    pub fn begin_write(&self) -> Result<WriteTransaction<H>> {
         Ok(WriteTransaction::new(self))
     }
 
-    pub fn begin_read(&self) -> Result<ReadTransaction<H>, io::Error> {
+    pub fn begin_read(&self) -> Result<ReadTransaction<H>> {
         let result = Self::recover_header(&self.file)?;
         // Use the stored configuration
         Ok(ReadTransaction::new(self, result.0.savepoint))
     }
 
-    pub(crate) fn load_node(&self, id: Record) -> Result<NodeInner, io::Error> {
+    pub(crate) fn load_node(&self, id: Record) -> Result<NodeInner> {
         let raw = self.file.read(id.offset, id.size as usize)?;
         let config = config::standard();
         let (inner, _): (NodeInner, usize) = bincode::decode_from_slice(&raw, config)
@@ -234,7 +235,7 @@ impl<'db, H: NodeHasher> SnapshotIterator<'db, H> {
         }
     }
 
-    fn prev(&mut self) -> Result<Option<SavePoint>, io::Error> {
+    fn prev(&mut self) -> Result<Option<SavePoint>> {
         if !self.started {
             let savepoint = Database::<H>::recover_header(&self.db.file)?.0.savepoint;
             self.current = if !savepoint.is_empty() {
@@ -261,7 +262,7 @@ impl<'db, H: NodeHasher> SnapshotIterator<'db, H> {
 }
 
 impl<'db, H: NodeHasher> Iterator for SnapshotIterator<'db, H> {
-    type Item = Result<ReadTransaction<'db, H>, io::Error>;
+    type Item = Result<ReadTransaction<'db, H>>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.prev() {
             Ok(Some(prev_savepoint)) => Some(Ok(ReadTransaction::new(self.db, prev_savepoint))),

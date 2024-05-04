@@ -1,8 +1,8 @@
-use spacedb::{
-    db::Database,
-    subtree::{SubTree, ValueOrHash},
-    NodeHasher, Sha256Hasher,
-};
+use std::collections::HashSet;
+use spacedb::{db::Database, subtree::{SubTree, ValueOrHash}, NodeHasher, Sha256Hasher, Hash};
+use spacedb::tx::ProofType;
+use rand::{Rng, SeedableRng, rngs::StdRng};
+
 
 #[test]
 fn it_works_with_empty_trees() {
@@ -13,7 +13,7 @@ fn it_works_with_empty_trees() {
     assert_eq!(root, db.hash(&[]), "empty tree must return zero hash");
 
     let foo = db.hash("foo".as_bytes());
-    let subtree = snapshot.prove(&foo).unwrap();
+    let subtree = snapshot.prove(&[foo], ProofType::Standard).unwrap();
 
     assert_eq!(
         subtree.root().unwrap(),
@@ -69,7 +69,7 @@ fn it_inserts_many_items_into_tree() {
     tx.commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
-    let subtree2 = tree.prove_all(&keys).unwrap();
+    let subtree2 = tree.prove(&keys, ProofType::Standard).unwrap();
 
     assert_eq!(
         subtree2.root().unwrap(),
@@ -120,7 +120,7 @@ fn it_should_iterate_over_tree() {
 }
 
 #[test]
-fn get_returns_error_when_key_not_exists() {
+fn it_returns_none_when_key_not_exists() {
     let db = Database::memory().unwrap();
     let mut tx = db.begin_write().unwrap();
     let key = db.hash(&[]);
@@ -130,7 +130,111 @@ fn get_returns_error_when_key_not_exists() {
     tx.commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
-    assert_eq!(tree.get(&key.clone()).unwrap(), value);
+    assert_eq!(tree.get(&key.clone()).unwrap(), Some(value));
     let non_existing_key = db.hash(&[1]);
-    assert_eq!(tree.get(&non_existing_key.clone()).is_err(), true);
+    assert!(tree.get(&non_existing_key.clone()).unwrap().is_none());
+}
+
+fn u32_to_key(k : u32) -> Hash {
+    let mut h = [0u8;32];
+    h[0..4].copy_from_slice(&k.to_be_bytes());
+    h
+}
+
+#[test]
+fn it_should_delete_elements_from_snapshot() {
+    let mut rng = StdRng::seed_from_u64(12345);
+    let mut keys_to_delete = HashSet::new();
+    let mut initial_set = Vec::new();
+    let sample_size = 100u32;
+    let items_to_delete = 22usize;
+
+    while keys_to_delete.len() < items_to_delete {
+        keys_to_delete.insert(rng.gen_range(0u32..sample_size));
+    }
+
+    for key in 0u32..sample_size {
+        if !keys_to_delete.contains(&key) {
+            initial_set.push(key);
+        }
+    }
+
+    let db = Database::memory().unwrap();
+    let mut tx = db.begin_write().unwrap();
+    for key in initial_set {
+        tx.insert(u32_to_key(key), vec![0]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let expected_root_after_deletion = db.begin_read().unwrap().root().unwrap();
+
+    // add all elements that we wish to delete
+    let mut tx = db.begin_write().unwrap();
+    for key in &keys_to_delete {
+        tx.insert(u32_to_key(*key), vec![0]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let root_with_entire_sample_size = db.begin_read().unwrap().root().unwrap();
+    assert_ne!(expected_root_after_deletion, root_with_entire_sample_size);
+
+    let mut tx = db.begin_write().unwrap();
+    for key in &keys_to_delete {
+        tx.delete(u32_to_key(*key)).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let actual_root_after_deletion = db.begin_read().unwrap().root().unwrap();
+    assert_eq!(expected_root_after_deletion, actual_root_after_deletion);
+}
+
+#[test]
+fn it_should_delete_elements_from_subtree() {
+    let mut rng = StdRng::seed_from_u64(12345);
+    let mut keys_to_delete = HashSet::new();
+    let mut initial_set = Vec::new();
+    let sample_size = 1000u32;
+    let items_to_delete = 28usize;
+
+    while keys_to_delete.len() < items_to_delete {
+        let k = rng.gen_range(0u32..sample_size);
+        keys_to_delete.insert(k);
+    }
+
+    for key in 0u32..sample_size {
+        if !keys_to_delete.contains(&key) {
+            initial_set.push(key);
+        }
+    }
+
+    // Add only the initial set
+    let db = Database::memory().unwrap();
+    let mut tx = db.begin_write().unwrap();
+    for key in initial_set {
+        tx.insert(u32_to_key(key), vec![0]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let expected_root_after_deletion = db.begin_read().unwrap().root().unwrap();
+
+    // Add all elements that we wish to delete as well
+    let mut tx = db.begin_write().unwrap();
+    for key in &keys_to_delete {
+        tx.insert(u32_to_key(*key), vec![0]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let root_with_entire_sample_size = db.begin_read().unwrap().root().unwrap();
+    assert_ne!(expected_root_after_deletion, root_with_entire_sample_size);
+
+    let key_hashes : Vec<Hash> = keys_to_delete.iter().map(|k: &u32| u32_to_key(*k)).collect();
+    let mut snapshot = db.begin_read().unwrap();
+    let mut subtree = snapshot.prove(&key_hashes, ProofType::Extended).unwrap();
+
+    for kh in key_hashes {
+        subtree = subtree.delete(&kh).unwrap()
+    }
+
+    let subtree_root = subtree.root().unwrap();
+    assert_eq!(expected_root_after_deletion, subtree_root);
 }

@@ -16,8 +16,45 @@ pub mod tx;
 #[cfg(feature = "std")]
 pub mod fs;
 
+pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Debug)]
+pub enum Error {
+    #[cfg(feature = "std")]
+    IO(std::io::Error),
+    Verify(VerifyError),
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            #[cfg(feature = "std")]
+            Error::IO(err) => write!(f, "IO error: {}", err),
+            Error::Verify(err) => write!(f, "Verification error: {}", err),
+        }
+    }
+}
+
+impl core::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            VerifyError::KeyExists => write!(f, "Key already exists"),
+            VerifyError::IncompleteProof => write!(f, "Incomplete proof"),
+            VerifyError::KeyNotFound => write!(f, "Key not found"),
+        }
+    }
+}
+
 #[cfg(feature = "std")]
-pub(crate) const ZERO_HASH: Hash = [0; 32];
+impl std::error::Error for Error {}
+
+
+#[derive(Debug)]
+pub enum VerifyError {
+    KeyExists,
+    IncompleteProof,
+    KeyNotFound,
+}
 
 use core::marker::PhantomData;
 use sha2::{Digest as _, Sha256};
@@ -90,5 +127,25 @@ impl NodeHasher for Sha256Hasher {
         hasher.update(right);
 
         hasher.finalize().as_slice().try_into().unwrap()
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Self {
+        Error::IO(err)
+    }
+}
+
+#[cfg(feature = "std")]
+impl From<std::io::ErrorKind> for Error {
+    fn from(kind: std::io::ErrorKind) -> Self {
+        Error::IO(std::io::Error::from(kind))
+    }
+}
+
+impl From<VerifyError> for Error {
+    fn from(err: VerifyError) -> Self {
+        Error::Verify(err)
     }
 }

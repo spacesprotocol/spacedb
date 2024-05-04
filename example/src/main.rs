@@ -1,6 +1,7 @@
-use spacedb::db::Database;
+use spacedb::{Result, db::Database };
+use spacedb::tx::ProofType;
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> Result<()> {
     let db = Database::memory()?;
 
     // Insert some data
@@ -25,7 +26,7 @@ fn main() -> Result<(), std::io::Error> {
         .collect();
 
     // reveal the relevant nodes needed to prove the specified set of keys
-    let subtree = snapshot.prove_all(&keys_to_prove)?;
+    let subtree = snapshot.prove(&keys_to_prove, ProofType::Standard)?;
 
     // Will have the exact same root as the snapshot
     println!("Subtree root: {}", hex::encode(subtree.root().unwrap()));

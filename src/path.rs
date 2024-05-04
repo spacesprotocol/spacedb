@@ -97,6 +97,70 @@ impl<T: AsMut<[u8]>> PathSegment<T> {
         }
     }
 
+    /// Extend from another path segment
+    pub fn extend<A: BitLength + PathUtils>(&mut self, other: A) {
+        let inner = other.inner();
+
+        let mut remaining_bits = other.bit_len();
+        let mut index = 0;
+
+        while remaining_bits >= 8 {
+            self.extend_from_byte(inner[index], 8);
+            remaining_bits -= 8;
+            index += 1;
+        }
+
+        if remaining_bits > 0 {
+            self.extend_from_byte(inner[index], remaining_bits as u8);
+        }
+    }
+
+    /// Extends the current path with bits from a single byte.
+    ///
+    /// This function takes a byte `bits` and a length `len` and extends the current path with the specified
+    /// number of bits.
+    ///
+    /// # Arguments
+    ///
+    /// * `bits` - The byte containing the bits to extend.
+    /// * `len` - The number of bits to extend from the byte (must be less than or equal to 8).
+    ///
+    /// # Panics
+    ///
+    /// This function panics if `len` is greater than 8 or not enough space
+    /// to accommodate the new bits.
+    pub fn extend_from_byte(&mut self, bits: u8, len: u8) {
+        assert!(len <= 8, "invalid bit length");
+
+        let raw = self.as_mut();
+        let current_bit_len = raw[0];
+        let new_bit_len = current_bit_len + len;
+
+        raw[0] = new_bit_len;
+        let inner = &mut raw[1..];
+
+        // Get the number of remaining bit slots in the byte array
+        // If the current bit length is a multiple of 8, this will just be 8-bits.
+        let remaining_slots = 8 - (current_bit_len % 8);
+
+        // If multiples of 8, index will point to the next unfilled byte,
+        // otherwise it will point to the last partially filled byte.
+        let mut index = (current_bit_len / 8) as usize;
+
+        // We have to fill the remaining slots in the existing byte
+        if len <= remaining_slots {
+            inner[index] |= bits >> (8 - len) << (remaining_slots - len);
+        } else {
+            inner[index] |= bits >> (8 - remaining_slots);
+
+            // carry over any remaining bits to a new byte
+            index += 1;
+            let remaining_bits = len - remaining_slots;
+            assert!(inner.len() > index, "not enough space");
+            inner[index] = bits >> (8 - remaining_bits) << remaining_slots;
+        }
+    }
+
     #[inline(always)]
     pub fn set_len(&mut self, len: usize) {
         assert!(len <= 255, "PathSegment length must be <= 255");
@@ -253,4 +317,52 @@ pub trait BitLength {
     fn bit_len(&self) -> usize;
     fn inner(&self) -> &[u8];
     fn as_bytes(&self) -> &[u8];
+}
+
+
+#[cfg(test)]
+mod tests {
+    use core::fmt::Display;
+    use crate::path::{BitLength, Direction, PathSegment, PathUtils};
+
+    impl<T: AsRef<[u8]>> Display for PathSegment<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            for i in 0..self.bit_len() {
+                if self.direction(i) == Direction::Right {
+                    write!(f, "1")?;
+                } else {
+                    write!(f, "0")?;
+                }
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_extend_from_byte() {
+        let mut segment = PathSegment([0u8;33]);
+        segment.set_len(2);
+
+        let inner = segment.as_mut_inner();
+        inner[0] = 0b1100_0000;
+
+        segment.extend_from_byte(0b1000_1000,3);
+        assert_eq!(segment.to_string(), "11100");
+
+        segment.extend_from_byte(0b1111_1111, 8);
+        assert_eq!(segment.to_string(), "1110011111111");
+
+        segment.extend_from_byte(0b0011_1111, 2);
+        assert_eq!(segment.to_string(), "111001111111100");
+
+        segment.extend_from_byte(0b1111_1111, 8);
+        assert_eq!(segment.to_string(), "11100111111110011111111");
+
+        segment.extend_from_byte(0b0000_1111, 4);
+        assert_eq!(segment.to_string(), "111001111111100111111110000");
+
+        segment.set_len(segment.bit_len() + 2);
+        assert_eq!(segment.to_string(),  "11100111111110011111111000000",
+                   "trailing bits must be cleared");
+    }
 }
