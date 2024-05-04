@@ -25,6 +25,30 @@ pub enum Error {
     Verify(VerifyError),
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            #[cfg(feature = "std")]
+            Error::IO(err) => write!(f, "IO error: {}", err),
+            Error::Verify(err) => write!(f, "Verification error: {}", err),
+        }
+    }
+}
+
+impl core::fmt::Display for VerifyError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            VerifyError::KeyExists => write!(f, "Key already exists"),
+            VerifyError::IncompleteProof => write!(f, "Incomplete proof"),
+            VerifyError::KeyNotFound => write!(f, "Key not found"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
+
+
 #[derive(Debug)]
 pub enum VerifyError {
     KeyExists,
