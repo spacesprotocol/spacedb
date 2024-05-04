@@ -4,7 +4,7 @@ use crate::{
 };
 
 use alloc::{boxed::Box, vec, vec::Vec};
-use std::marker::PhantomData;
+use core::marker::PhantomData;
 use bincode::{
     de::Decoder,
     enc::Encoder,
