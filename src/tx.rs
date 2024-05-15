@@ -32,15 +32,16 @@ pub struct WriteTransaction<'db, H: NodeHasher> {
     header: MutexGuard<'db, DatabaseHeader>,
 }
 
-pub struct ReadTransaction<'db, H: NodeHasher> {
-    pub db: &'db Database<H>,
+#[derive(Clone)]
+pub struct ReadTransaction<H: NodeHasher> {
+    pub db: Database<H>,
     pub root: Record,
-    pub cache: Cache<'db, H>,
+    pub cache: Cache,
     pub config: Configuration<H>,
 }
 
-pub struct Cache<'db, H: NodeHasher> {
-    db: &'db Database<H>,
+#[derive(Clone)]
+pub struct Cache {
     pub node: Option<Node>,
     pub len: usize,
     pub max_len: usize,
@@ -56,23 +57,23 @@ struct SubTreeNodeInfo {
     value_node: bool
 }
 
-impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
-    pub(crate) fn new(db: &'db Database<H>, savepoint: SavePoint) -> Self {
+impl<H: NodeHasher> ReadTransaction<H> {
+    pub(crate) fn new(db: Database<H>, savepoint: SavePoint) -> Self {
         Self {
-            db,
+            db: db.clone(),
             root: savepoint.root,
-            cache: Cache::new(db, savepoint.root, db.config.cache_size),
+            cache: Cache::new(savepoint.root, db.config.cache_size),
             config: db.config.clone(),
         }
     }
 
     pub fn iter(&self) -> KeyIterator<H> {
-        KeyIterator::new(self.db, self.root)
+        KeyIterator::new(self.db.clone(), self.root)
     }
 
     pub fn get(&mut self, key: &Hash) -> Result<Option<Vec<u8>>> {
         let mut node = self.cache.node.take().unwrap();
-        let result = Self::get_node(&mut self.cache, &mut node, Path(key), 0);
+        let result = Self::get_node(&self.db, &mut self.cache, &mut node, Path(key), 0);
         self.cache.node = Some(node);
         result
     }
@@ -85,7 +86,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         }
 
         let h = {
-            let entry = Self::hash_node(&mut self.cache, &mut n)?;
+            let entry = Self::hash_node(&self.db, &mut self.cache, &mut n)?;
             entry.node.hash_cache.clone().unwrap()
         };
         self.cache.node = Some(n);
@@ -101,7 +102,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
         let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
         key_paths.sort();
 
-        match Self::prove_nodes(&mut self.cache, &mut node, key_paths.as_slice(), 0, proof_type) {
+        match Self::prove_nodes(&self.db, &mut self.cache, &mut node, key_paths.as_slice(), 0, proof_type) {
             Ok(info) => {
                 self.cache.node = Some(node);
                 Ok(SubTree::<H> {
@@ -117,13 +118,14 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     }
 
     fn prove_nodes(
-        cache: &mut Cache<H>,
+        db: &Database<H>,
+        cache: &mut Cache,
         node: &mut Node,
         keys: &[Path<&Hash>],
         depth: usize,
         proof_type: ProofType,
     ) -> Result<SubTreeNodeInfo> {
-        let entry = cache.load_node(node)?;
+        let entry = cache.load_node(db, node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf {
                 key: node_key,
@@ -159,31 +161,31 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 let (left_keys, right_keys) = keys.split_at(split);
 
                 let mut left_subtree = if left_keys.is_empty() { None } else {
-                    Some(Self::prove_nodes(cache, left, left_keys, depth + 1, proof_type)?)
+                    Some(Self::prove_nodes(db, cache, left, left_keys, depth + 1, proof_type)?)
                 };
                 let mut right_subtree = if right_keys.is_empty() { None } else {
-                    Some(Self::prove_nodes(cache, right, right_keys, depth + 1, proof_type)?)
+                    Some(Self::prove_nodes(db, cache, right, right_keys, depth + 1, proof_type)?)
                 };
 
                 // Include extended hash of the sibling if its subtree isn't already part of the proof
                 if proof_type == ProofType::Extended && left_subtree.is_none() &&
                     right_subtree.is_some() && right_subtree.as_ref().unwrap().value_node {
                     left_subtree = Some(SubTreeNodeInfo {
-                        node: Self::hash_node_extended(cache, left)?,
+                        node: Self::hash_node_extended(db, cache, left)?,
                         value_node: false
                     })
                 }
                 if proof_type == ProofType::Extended && right_subtree.is_none() &&
                     left_subtree.is_some() && left_subtree.as_ref().unwrap().value_node {
                     right_subtree = Some(SubTreeNodeInfo {
-                        node: Self::hash_node_extended(cache, right)?,
+                        node: Self::hash_node_extended(db, cache, right)?,
                         value_node: false
                     })
                 }
 
                 // If extended hashes aren't needed, include basic ones
                 if left_subtree.is_none() {
-                    let left_entry = Self::hash_node(cache, left)?;
+                    let left_entry = Self::hash_node(db, cache, left)?;
                     let left_hash = left_entry.node.hash_cache.clone().unwrap();
                     left_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(left_hash),
@@ -191,7 +193,7 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                     });
                 }
                 if right_subtree.is_none() {
-                    let right_entry = Self::hash_node(cache, right)?;
+                    let right_entry = Self::hash_node(db, cache, right)?;
                     let right_hash = right_entry.node.hash_cache.clone().unwrap();
                     right_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(right_hash),
@@ -217,14 +219,15 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
 
 
     fn hash_node<'c>(
-        cache: &mut Cache<H>,
+        db: &Database<H>,
+        cache: &mut Cache,
         node: &'c mut Node,
     ) -> Result<CacheEntry<'c>> {
         if node.hash_cache.is_some() {
             return Ok(CacheEntry::new(node, false));
         }
 
-        let entry = cache.load_node(node)?;
+        let entry = cache.load_node(db, node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf { key, value } => {
                 let hash = H::hash(value);
@@ -235,9 +238,9 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 left,
                 right,
             } => {
-                let left_entry = Self::hash_node(cache, left)?;
+                let left_entry = Self::hash_node(db, cache, left)?;
                 let left_hash = left_entry.node.hash_cache.as_ref().unwrap();
-                let right_entry = Self::hash_node(cache, right)?;
+                let right_entry = Self::hash_node(db, cache, right)?;
                 let right_hash = right_entry.node.hash_cache.as_ref().unwrap();
                 entry.node.hash_cache =
                     Some(H::hash_internal(prefix.as_bytes(), left_hash, right_hash));
@@ -254,10 +257,11 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     /// a [SubTreeNode::Internal] or [SubTreeNode::Leaf]
     /// while `hash_node` converts any [Node] into a [SubTreeNode::Hash]
     fn hash_node_extended(
-        cache: &mut Cache<H>,
+        db: &Database<H>,
+        cache: &mut Cache,
         node: &mut Node,
     ) -> Result<SubTreeNode> {
-        let entry = cache.load_node(node)?;
+        let entry = cache.load_node(db, node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf { key, value } => {
                 let hash = H::hash(value);
@@ -271,8 +275,8 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 left,
                 right,
             } => {
-                let left_hash = Self::hash_node(cache, left)?.node.hash_cache.as_ref().unwrap().clone();
-                let right_hash = Self::hash_node(cache, right)?.node.hash_cache.as_ref().unwrap().clone();
+                let left_hash = Self::hash_node(db, cache, left)?.node.hash_cache.as_ref().unwrap().clone();
+                let right_hash = Self::hash_node(db, cache, right)?.node.hash_cache.as_ref().unwrap().clone();
                 Ok(SubTreeNode::Internal {
                     prefix: prefix.clone(),
                     left: Box::new(SubTreeNode::Hash(left_hash)),
@@ -283,12 +287,13 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
     }
 
     fn get_node<'c>(
-        cache: &mut Cache<H>,
+        db: &Database<H>,
+        cache: &mut Cache,
         node: &'c mut Node,
         key: Path<&Hash>,
         depth: usize,
     ) -> Result<Option<Vec<u8>>> {
-        let entry = cache.load_node(node)?;
+        let entry = cache.load_node(db, node)?;
         match entry.node.inner.as_mut().unwrap() {
             NodeInner::Leaf {
                 value,
@@ -309,8 +314,8 @@ impl<'db, H: NodeHasher + 'db> ReadTransaction<'db, H> {
                 }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
-                    Direction::Right => Self::get_node(cache, right, key, depth + 1),
-                    Direction::Left => Self::get_node(cache, left, key, depth + 1),
+                    Direction::Right => Self::get_node(db, cache, right, key, depth + 1),
+                    Direction::Left => Self::get_node(db, cache, left, key, depth + 1),
                 }
             }
         }
@@ -628,19 +633,19 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
     }
 }
 
-pub struct KeyIterator<'db, H: NodeHasher> {
-    db: &'db Database<H>,
+pub struct KeyIterator<H: NodeHasher> {
+    db: Database<H>,
     stack: Vec<Record>,
 }
 
-impl<'db, H: NodeHasher> KeyIterator<'db, H> {
-    fn new(db: &'db Database<H>, root: Record) -> Self {
+impl<H: NodeHasher> KeyIterator<H> {
+    fn new(db: Database<H>, root: Record) -> Self {
         let stack = vec![root];
         Self { db, stack }
     }
 }
 
-impl<'db, H: NodeHasher> Iterator for KeyIterator<'db, H> {
+impl<'db, H: NodeHasher> Iterator for KeyIterator<H> {
     type Item = Result<(Hash, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -673,13 +678,12 @@ impl Drop for CacheEntry<'_> {
     }
 }
 
-impl<'db, H: NodeHasher> Cache<'db, H> {
-    fn new(db: &'db Database<H>, record: Record, capacity: usize) -> Self {
+impl Cache {
+    fn new(record: Record, capacity: usize) -> Self {
         Self {
             node: Some(Node::from_id(record)),
             len: 0,
             max_len: capacity,
-            db,
         }
     }
 
@@ -687,14 +691,14 @@ impl<'db, H: NodeHasher> Cache<'db, H> {
         self.len > self.max_len
     }
 
-    fn load_node<'c>(&mut self, node: &'c mut Node) -> Result<CacheEntry<'c>> {
+    fn load_node<'c, H: NodeHasher>(&mut self, db: &Database<H>, node: &'c mut Node) -> Result<CacheEntry<'c>> {
         if node.inner.is_some() {
             return Ok(CacheEntry { node, clean: false });
         }
         assert_ne!(node.id, EMPTY_RECORD, "Attempted to read empty record");
         let is_full = self.is_full();
 
-        let inner = self.db.load_node(node.id)?;
+        let inner = db.load_node(node.id)?;
 
         let empty_len = node.mem_size();
         node.inner = Some(inner);

@@ -23,9 +23,10 @@ pub struct DatabaseHeader {
     pub savepoint: SavePoint,
 }
 
+#[derive(Clone)]
 pub struct Database<H: NodeHasher> {
     pub(crate) header: Arc<Mutex<DatabaseHeader>>,
-    pub(crate) file: Box<dyn StorageBackend>,
+    pub(crate) file: Arc<Box<dyn StorageBackend>>,
     pub config: Configuration<H>,
 }
 
@@ -135,7 +136,7 @@ impl<H: NodeHasher> Database<H> {
 
         let db = Self {
             header: Arc::new(Mutex::new(header)),
-            file,
+            file: Arc::new(file),
             config,
         };
 
@@ -204,7 +205,7 @@ impl<H: NodeHasher> Database<H> {
     pub fn begin_read(&self) -> Result<ReadTransaction<H>> {
         let result = Self::recover_header(&self.file)?;
         // Use the stored configuration
-        Ok(ReadTransaction::new(self, result.0.savepoint))
+        Ok(ReadTransaction::new(self.clone(), result.0.savepoint))
     }
 
     pub(crate) fn load_node(&self, id: Record) -> Result<NodeInner> {
@@ -262,10 +263,10 @@ impl<'db, H: NodeHasher> SnapshotIterator<'db, H> {
 }
 
 impl<'db, H: NodeHasher> Iterator for SnapshotIterator<'db, H> {
-    type Item = Result<ReadTransaction<'db, H>>;
+    type Item = Result<ReadTransaction<H>>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.prev() {
-            Ok(Some(prev_savepoint)) => Some(Ok(ReadTransaction::new(self.db, prev_savepoint))),
+            Ok(Some(prev_savepoint)) => Some(Ok(ReadTransaction::new(self.db.clone(), prev_savepoint))),
             Ok(None) => None,
             Err(e) => Some(Err(e)),
         }
