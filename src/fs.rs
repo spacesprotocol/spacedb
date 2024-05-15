@@ -12,7 +12,7 @@ use std::{
     sync::*,
 };
 
-pub trait StorageBackend {
+pub trait StorageBackend: Sync + Send {
     fn len(&self) -> Result<u64, io::Error>;
     fn set_len(&self, len: u64) -> Result<(), io::Error>;
     fn read(&self, offset: u64, len: usize) -> Result<Vec<u8>, io::Error>;
