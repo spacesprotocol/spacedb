@@ -3,7 +3,6 @@ use spacedb::{db::Database, subtree::{SubTree, ValueOrHash}, NodeHasher, Sha256H
 use spacedb::tx::{ProofType, ReadTransaction};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
-
 #[test]
 fn it_works_with_empty_trees() {
     let db = Database::memory().unwrap();
@@ -95,7 +94,7 @@ fn it_should_iterate_over_tree() {
     for i in 0..n {
         let key = Sha256Hasher::hash(format!("key{}", i).as_bytes());
         let value = format!("data{}", i).as_bytes().to_vec();
-        tx.insert(key.clone(), value.clone()).unwrap();
+        tx.insert(key, value.clone()).unwrap();
         inserted_values.insert(String::from_utf8(value).unwrap());
     }
 
@@ -255,7 +254,7 @@ fn it_should_store_metadata() {
     for i in 0..100 {
         let key = Sha256Hasher::hash(format!("key{}", i).as_bytes());
         let value = format!("data{}", i).as_bytes().to_vec();
-        tx.insert(key.clone(), value.clone()).unwrap();
+        tx.insert(key, value.clone()).unwrap();
     }
     tx.set_metadata("snapshot 1".as_bytes().to_vec()).unwrap();
     tx.commit().unwrap();
@@ -271,4 +270,44 @@ fn it_should_store_metadata() {
     for (index, snapshot) in snapshots.iter().rev().enumerate() {
         assert_eq!(String::from_utf8_lossy(snapshot.metadata()), format!("snapshot {}", index));
     }
+}
+
+#[test]
+fn it_should_rollback() -> spacedb::Result<()> {
+    let db = Database::memory()?;
+    let snapshots_len: usize = 20;
+    let items_per_snapshot: usize = 10;
+
+    for snapshot_index in 0..snapshots_len {
+        let mut tx = db.begin_write()?;
+        for entry in 0..items_per_snapshot {
+            tx.insert(u32_to_key((snapshot_index * entry) as u32), entry.to_be_bytes().to_vec())?;
+        }
+        tx.commit()?;
+    }
+
+    let mut roots = Vec::with_capacity(snapshots_len);
+    for snapshot in db.iter() {
+        roots.push(snapshot?.root()?)
+    }
+    assert_eq!(roots.len(), snapshots_len, "expected roots == snapshots len");
+
+    // try rolling back latest snapshot
+    let snapshot = db.begin_read()?;
+    assert!(snapshot.rollback().is_ok(), "expected rollback to work");
+
+    // confirm we still have the same snapshot
+    let mut snapshot = db.begin_read()?;
+
+    assert_eq!(&snapshot.root()?, roots.first().unwrap(), "bad roots");
+
+    // rollback the 6th snapshot
+    db.iter().skip(5).next().unwrap()?.rollback()?;
+    let snapshots_len = snapshots_len - 5;
+    assert_eq!(db.iter().count(), snapshots_len, "snapshot count mismatch");
+
+    // db should now point to the snapshot we just rolled back
+    let mut snapshot = db.begin_read()?;
+    assert_eq!(&snapshot.root()?, roots.iter().skip(5).next().unwrap(), "bad roots");
+    Ok(())
 }
