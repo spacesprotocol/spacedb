@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use spacedb::{db::Database, subtree::{SubTree, ValueOrHash}, NodeHasher, Sha256Hasher, Hash};
-use spacedb::tx::ProofType;
+use spacedb::tx::{ProofType, ReadTransaction};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 
@@ -11,7 +11,6 @@ fn it_works_with_empty_trees() {
     let mut snapshot = db.begin_read().unwrap();
     let root = snapshot.root().unwrap();
     assert_eq!(root, db.hash(&[]), "empty tree must return zero hash");
-
     let foo = db.hash("foo".as_bytes());
     let subtree = snapshot.prove(&[foo], ProofType::Standard).unwrap();
 
@@ -135,8 +134,8 @@ fn it_returns_none_when_key_not_exists() {
     assert!(tree.get(&non_existing_key.clone()).unwrap().is_none());
 }
 
-fn u32_to_key(k : u32) -> Hash {
-    let mut h = [0u8;32];
+fn u32_to_key(k: u32) -> Hash {
+    let mut h = [0u8; 32];
     h[0..4].copy_from_slice(&k.to_be_bytes());
     h
 }
@@ -227,7 +226,7 @@ fn it_should_delete_elements_from_subtree() {
     let root_with_entire_sample_size = db.begin_read().unwrap().root().unwrap();
     assert_ne!(expected_root_after_deletion, root_with_entire_sample_size);
 
-    let key_hashes : Vec<Hash> = keys_to_delete.iter().map(|k: &u32| u32_to_key(*k)).collect();
+    let key_hashes: Vec<Hash> = keys_to_delete.iter().map(|k: &u32| u32_to_key(*k)).collect();
     let mut snapshot = db.begin_read().unwrap();
     let mut subtree = snapshot.prove(&key_hashes, ProofType::Extended).unwrap();
 
@@ -237,4 +236,36 @@ fn it_should_delete_elements_from_subtree() {
 
     let subtree_root = subtree.root().unwrap();
     assert_eq!(expected_root_after_deletion, subtree_root);
+}
+
+#[test]
+fn it_should_store_metadata() {
+    let db = Database::memory().unwrap();
+    let mut tx = db.begin_write().unwrap();
+    tx.set_metadata("snapshot 0".as_bytes().to_vec()).unwrap();
+    tx.commit().unwrap();
+
+    let snapshot = db.begin_read().unwrap();
+    assert_eq!(snapshot.metadata(), "snapshot 0".as_bytes());
+
+    let mut tx = db.begin_write().unwrap();
+    for i in 0..100 {
+        let key = Sha256Hasher::hash(format!("key{}", i).as_bytes());
+        let value = format!("data{}", i).as_bytes().to_vec();
+        tx.insert(key.clone(), value.clone()).unwrap();
+    }
+    tx.set_metadata("snapshot 1".as_bytes().to_vec()).unwrap();
+    tx.commit().unwrap();
+
+    let snapshot = db.begin_read().unwrap();
+    assert_eq!(snapshot.metadata(), "snapshot 1".as_bytes());
+
+    let snapshots: Vec<ReadTransaction<Sha256Hasher>> = db.iter()
+        .map(|s| s.unwrap()).collect();
+
+    assert_eq!(snapshots.len(), 2);
+
+    for (index, snapshot) in snapshots.iter().rev().enumerate() {
+        assert_eq!(String::from_utf8_lossy(snapshot.metadata()), format!("snapshot {}", index));
+    }
 }

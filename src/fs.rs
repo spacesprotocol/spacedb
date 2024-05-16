@@ -1,7 +1,7 @@
 // Uses flock on Unix and LockFile on Windows to ensure exclusive access to the database file.
 // based on https://github.com/cberner/redb/tree/master/src/tree_store/page_store/file_backend
 use crate::{
-    db::{Record, SavePoint, EMPTY_RECORD, PAGE_SIZE},
+    db::{Record, SavePoint, EMPTY_RECORD, CHUNK_SIZE},
     node::Node,
 };
 use bincode::config;
@@ -334,7 +334,7 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
             return Ok(());
         }
 
-        let aligned_len = self.len - (self.len % PAGE_SIZE);
+        let aligned_len = self.len - (self.len % CHUNK_SIZE as usize);
 
         // Write all full pages in one go, if any
         if aligned_len > 0 {
@@ -348,11 +348,11 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
         if aligned_len < self.len {
             let remaining_len = self.len - aligned_len;
             self.buffer.copy_within(aligned_len..self.len, 0);
-            self.buffer[remaining_len..PAGE_SIZE].fill(0);
+            self.buffer[remaining_len..CHUNK_SIZE as usize].fill(0);
 
-            self.file.set_len(self.file_len + PAGE_SIZE as u64)?;
-            self.file.write(self.file_len, &self.buffer[0..PAGE_SIZE])?;
-            self.file_len += PAGE_SIZE as u64;
+            self.file.set_len(self.file_len + CHUNK_SIZE)?;
+            self.file.write(self.file_len, &self.buffer[0..CHUNK_SIZE as usize])?;
+            self.file_len += CHUNK_SIZE;
         }
 
         self.len = 0;

@@ -14,13 +14,14 @@ use std::{
 };
 
 const HEADER_MAGIC: [u8; 9] = [b's', b'p', b'a', b'c', b'e', b':', b'/', b'/', b'.'];
-pub(crate) const PAGE_SIZE: usize = 4096;
+pub(crate) const CHUNK_SIZE: u64 = 4096;
+pub(crate) const HEADER_SIZE: u64 = CHUNK_SIZE * 2;
 
 #[derive(Debug, Encode, Decode, PartialEq, Eq)]
 pub struct DatabaseHeader {
-    pub magic: [u8; 9],
-    pub version: u8,
-    pub savepoint: SavePoint,
+    pub(crate) magic: [u8; 9],
+    pub(crate) version: u8,
+    pub(crate) savepoint: SavePoint,
 }
 
 #[derive(Clone)]
@@ -30,10 +31,11 @@ pub struct Database<H: NodeHasher> {
     pub config: Configuration<H>,
 }
 
-#[derive(Copy, Clone, Encode, Decode, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Encode, Decode, Debug, Eq, PartialEq, Hash)]
 pub struct SavePoint {
-    pub root: Record,
-    pub previous_save_point: Record,
+    pub(crate) root: Record,
+    pub(crate) previous_savepoint: Record,
+    pub(crate) metadata: Option<Vec<u8>>,
 }
 
 #[derive(Copy, Clone, Encode, Decode, Debug, Eq, PartialEq, Hash)]
@@ -51,18 +53,19 @@ impl DatabaseHeader {
             version: 0,
             savepoint: SavePoint {
                 root: EMPTY_RECORD,
-                previous_save_point: EMPTY_RECORD,
+                previous_savepoint: EMPTY_RECORD,
+                metadata: None,
             },
         }
     }
 
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn serialize(&self) -> Vec<u8> {
         let config = config::standard()
             .with_fixed_int_encoding()
             .with_little_endian();
+
         let mut raw = bincode::encode_to_vec(self, config).unwrap();
-        // add 24 bytes padding + 4 bytes checksum
-        raw.extend_from_slice(&[0; 26]);
+
         let mut hasher = Sha256::new();
         hasher.update(&raw);
         let checksum = hasher.finalize();
@@ -71,30 +74,31 @@ impl DatabaseHeader {
     }
 
     fn from_bytes(bytes: &[u8]) -> core::result::Result<Self, DecodeError> {
-        // calc checksum
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes[..60]);
-        let checksum = hasher.finalize();
-
-        if bytes[60..64] != checksum[..4] {
-            return Err(DecodeError::Other("Checksum mismatch"));
-        }
-
         let config = config::standard()
             .with_fixed_int_encoding()
             .with_little_endian();
-        let (h, _) = bincode::decode_from_slice(bytes, config)?;
+        let (h, len) = bincode::decode_from_slice(bytes, config)?;
+
+        // calc checksum
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes[..len]);
+        let expected = hasher.finalize();
+
+        let actual = &bytes[len..len + 4];
+        if &actual[..4] != &expected[..4] {
+            return Err(DecodeError::Other("Checksum mismatch"));
+        }
 
         Ok(h)
     }
 
     pub(crate) fn len(&self) -> u64 {
         if self.savepoint.is_empty() {
-            return (PAGE_SIZE * 2) as u64;
+            return HEADER_SIZE;
         }
 
-        let save_point_len = self.savepoint.len();
-        return (save_point_len + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64 * PAGE_SIZE as u64;
+        let chunks_required = (self.savepoint.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        chunks_required * CHUNK_SIZE
     }
 }
 
@@ -128,10 +132,6 @@ impl<H: NodeHasher> Database<H> {
             has_header = true;
         } else {
             header = DatabaseHeader::new();
-            let bytes = header.to_bytes();
-            file.set_len(bytes.len() as u64)?;
-            file.write(0, &bytes)?;
-            file.sync_data()?;
         }
 
         let db = Self {
@@ -156,13 +156,15 @@ impl<H: NodeHasher> Database<H> {
         file: &Box<dyn StorageBackend>,
     ) -> Result<(DatabaseHeader, bool)> {
         // Attempt to read from slot 0
-        let bytes = file.read(0, 64)?;
+        let mut offset = 0;
+        let bytes = file.read(offset, CHUNK_SIZE as usize)?;
         if let Ok(header) = DatabaseHeader::from_bytes(&bytes) {
             return Ok((header, false));
         }
 
-        // Didn't work, try slot 1
-        let bytes = file.read(PAGE_SIZE as u64, 64)?;
+        // Didn't work, try backup
+        offset = CHUNK_SIZE;
+        let bytes = file.read(offset, CHUNK_SIZE as usize)?;
         let header = DatabaseHeader::from_bytes(&bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
@@ -170,23 +172,18 @@ impl<H: NodeHasher> Database<H> {
     }
 
     pub(crate) fn write_header(&self, hdr: &DatabaseHeader) -> Result<()> {
-        // Database reserves first two pages for the metadata
-        // The first page slot 0 contains the header
-        // Second page slot 1 contains a backup of the header
-        if self.file.len()? < PAGE_SIZE as u64 * 2 {
-            self.file.set_len(PAGE_SIZE as u64 * 2)?;
+        if self.file.len()? < HEADER_SIZE {
+            self.file.set_len(HEADER_SIZE)?;
         }
 
-        let mut bytes = hdr.to_bytes();
-        assert_eq!(bytes.len(), 64);
-
-        bytes.extend_from_slice(&[0; PAGE_SIZE - 64]);
+        let bytes = hdr.serialize();
+        assert!(bytes.len() <= CHUNK_SIZE as usize);
 
         self.file.write(0, &bytes)?;
         self.file.sync_data()?;
 
         // write backup header
-        self.file.write(PAGE_SIZE as u64, &bytes)?;
+        self.file.write(CHUNK_SIZE, &bytes)?;
         self.file.sync_data()?;
         Ok(())
     }
@@ -257,7 +254,7 @@ impl<'db, H: NodeHasher> SnapshotIterator<'db, H> {
         if savepoint.is_initial() {
             return Ok(Some(savepoint));
         }
-        self.current = Some(self.db.read_save_point(savepoint.previous_save_point)?);
+        self.current = Some(self.db.read_save_point(savepoint.previous_savepoint)?);
         Ok(Some(savepoint))
     }
 }
@@ -276,17 +273,22 @@ impl<'db, H: NodeHasher> Iterator for SnapshotIterator<'db, H> {
 impl SavePoint {
     #[inline]
     pub fn is_initial(&self) -> bool {
-        self.previous_save_point == EMPTY_RECORD
+        self.previous_savepoint == EMPTY_RECORD
     }
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.root == EMPTY_RECORD && self.previous_save_point == EMPTY_RECORD
+        self.root == EMPTY_RECORD && self.previous_savepoint == EMPTY_RECORD
     }
 
     #[inline]
     pub fn len(&self) -> u64 {
-        return self.root.size as u64 + self.root.offset;
+        let meta_size = match &self.metadata {
+            None => 0,
+            Some(m) => m.len()
+        } as u64;
+        let root_size = self.root.offset + self.root.size as u64;
+        meta_size + root_size
     }
 }
 
@@ -297,7 +299,7 @@ mod tests {
     #[test]
     fn test_header() {
         let header = DatabaseHeader::new();
-        let bytes = header.to_bytes();
+        let bytes = header.serialize();
         let header2 = DatabaseHeader::from_bytes(&bytes).unwrap();
         assert_eq!(header, header2);
 

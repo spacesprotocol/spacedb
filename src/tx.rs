@@ -5,11 +5,11 @@ use core::marker::PhantomData;
 use std::{io, sync::MutexGuard};
 
 use crate::{
-    db::{Database, Record, SavePoint, EMPTY_RECORD, PAGE_SIZE},
+    db::{Database, Record, SavePoint, EMPTY_RECORD, CHUNK_SIZE},
     node::{Node, NodeInner},
     path::{BitLength, PathUtils},
     subtree::{SubTree, SubTreeNode},
-    Configuration, Hash, NodeHasher,
+    Hash, NodeHasher,
 };
 
 use crate::{db::DatabaseHeader, fs::WriteBuffer};
@@ -30,14 +30,15 @@ pub struct WriteTransaction<'db, H: NodeHasher> {
     pub db: &'db Database<H>,
     pub(crate) state: Option<Node>,
     header: MutexGuard<'db, DatabaseHeader>,
+    metadata: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
 pub struct ReadTransaction<H: NodeHasher> {
-    pub db: Database<H>,
-    pub root: Record,
-    pub cache: Cache,
-    pub config: Configuration<H>,
+    db: Database<H>,
+    root: Record,
+    cache: Cache,
+    metadata: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -54,7 +55,7 @@ struct CacheEntry<'n> {
 
 struct SubTreeNodeInfo {
     node: SubTreeNode,
-    value_node: bool
+    value_node: bool,
 }
 
 impl<H: NodeHasher> ReadTransaction<H> {
@@ -63,12 +64,19 @@ impl<H: NodeHasher> ReadTransaction<H> {
             db: db.clone(),
             root: savepoint.root,
             cache: Cache::new(savepoint.root, db.config.cache_size),
-            config: db.config.clone(),
+            metadata: savepoint.metadata,
         }
     }
 
     pub fn iter(&self) -> KeyIterator<H> {
         KeyIterator::new(self.db.clone(), self.root)
+    }
+
+    pub fn metadata(&self) -> &[u8] {
+        match &self.metadata {
+            None => &[],
+            Some(meta) => meta.as_slice()
+        }
     }
 
     pub fn get(&mut self, key: &Hash) -> Result<Option<Vec<u8>>> {
@@ -142,7 +150,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                         key: node_key.clone(),
                         value_or_hash,
                     },
-                    value_node: include_value
+                    value_node: include_value,
                 })
             }
             NodeInner::Internal {
@@ -172,14 +180,14 @@ impl<H: NodeHasher> ReadTransaction<H> {
                     right_subtree.is_some() && right_subtree.as_ref().unwrap().value_node {
                     left_subtree = Some(SubTreeNodeInfo {
                         node: Self::hash_node_extended(db, cache, left)?,
-                        value_node: false
+                        value_node: false,
                     })
                 }
                 if proof_type == ProofType::Extended && right_subtree.is_none() &&
                     left_subtree.is_some() && left_subtree.as_ref().unwrap().value_node {
                     right_subtree = Some(SubTreeNodeInfo {
                         node: Self::hash_node_extended(db, cache, right)?,
-                        value_node: false
+                        value_node: false,
                     })
                 }
 
@@ -189,7 +197,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                     let left_hash = left_entry.node.hash_cache.clone().unwrap();
                     left_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(left_hash),
-                        value_node: false
+                        value_node: false,
                     });
                 }
                 if right_subtree.is_none() {
@@ -197,7 +205,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                     let right_hash = right_entry.node.hash_cache.clone().unwrap();
                     right_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(right_hash),
-                        value_node: false
+                        value_node: false,
                     });
                 }
 
@@ -211,7 +219,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                         left: Box::new(left_subtree.unwrap().node),
                         right: Box::new(right_subtree.unwrap().node),
                     },
-                    value_node
+                    value_node,
                 })
             }
         }
@@ -300,9 +308,9 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 key: node_key,
             } => {
                 if node_key.0 == *key.0 {
-                    return Ok(Some(value.clone()))
+                    return Ok(Some(value.clone()));
                 }
-                return Ok(None)
+                return Ok(None);
             }
             NodeInner::Internal {
                 prefix,
@@ -310,7 +318,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 right,
             } => {
                 if key.split_point(depth, *prefix).is_some() {
-                    return Ok(None)
+                    return Ok(None);
                 }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
@@ -335,7 +343,17 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
             db,
             state,
             header: head,
+            metadata: None,
         }
+    }
+
+    pub fn set_metadata(&mut self, metadata: Vec<u8>) -> Result<()> {
+        if metadata.len() > 512 {
+            return Err(io::Error::new(io::ErrorKind::Other, "metadata must not exceed 512 bytes").into());
+        }
+
+        self.metadata = Some(metadata);
+        Ok(())
     }
 
     pub fn insert(&mut self, key: Hash, value: Vec<u8>) -> Result<()> {
@@ -596,36 +614,44 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
 
         Ok(node.id)
     }
+
+
     pub fn commit(mut self) -> Result<()> {
-        if self.state.is_none() {
+        if self.state.is_none() && self.metadata.is_none() {
             return Ok(());
         }
 
-        let expected_file_length = self.header.len();
+        let write_len = self.header.len();
         assert_eq!(
-            expected_file_length % PAGE_SIZE as u64,
+            write_len % CHUNK_SIZE,
             0,
-            "Database length is not a multiple of page size {}",
-            expected_file_length
+            "Database length is not a multiple of chunk size {}",
+            write_len
         );
 
         let file_length = self.db.file.len()?;
-        if file_length != expected_file_length {
+        if file_length != write_len {
             // truncate/extend file to expected length
-            self.db.file.set_len(expected_file_length)?;
+            self.db.file.set_len(write_len)?;
         }
 
         let mut buf: WriteBuffer<BUFFER_SIZE> = WriteBuffer::new(&self.db.file, file_length);
-        let mut state = self.state.take().unwrap();
-        let root = self.write_all(&mut buf, &mut state)?;
 
-        let previous_save_point = buf.write_save_point(&self.header.savepoint)?;
+        let root = match self.state.take() {
+            None => self.header.savepoint.root,
+            Some(mut state) => {
+                self.write_all(&mut buf, &mut state)?
+            }
+        };
+
+        let previous_savepoint = buf.write_save_point(&self.header.savepoint)?;
         buf.flush()?;
         self.db.file.sync_data()?;
 
         self.header.savepoint = SavePoint {
             root,
-            previous_save_point,
+            previous_savepoint,
+            metadata: self.metadata,
         };
 
         self.db.write_header(&self.header)?;
@@ -730,7 +756,7 @@ mod tests {
         tx.commit().unwrap();
 
         let mut snapshot = db.begin_read().unwrap();
-        let standard_subtree = snapshot.prove(&[[0u8;32]], ProofType::Standard).unwrap();
+        let standard_subtree = snapshot.prove(&[[0u8; 32]], ProofType::Standard).unwrap();
 
         match standard_subtree.root {
             SubTreeNode::Internal { left, right, .. } => {
@@ -740,13 +766,13 @@ mod tests {
             _ => panic!("invalid result")
         }
 
-        let extended_subtree = snapshot.prove(&[[0u8;32]], ProofType::Extended).unwrap();
+        let extended_subtree = snapshot.prove(&[[0u8; 32]], ProofType::Extended).unwrap();
         match extended_subtree.root {
             SubTreeNode::Internal { left, right, .. } => {
                 assert!(left.is_value_leaf(), "expected a value leaf on left");
                 // Extended proof includes the sibling with terminal child hashes if any
                 match *right {
-                    SubTreeNode::Internal { left: left_left, right :left_right, .. } => {
+                    SubTreeNode::Internal { left: left_left, right: left_right, .. } => {
                         assert!(matches!(*left_left, SubTreeNode::Hash(_)), "expected a hash node");
                         assert!(matches!(*left_right, SubTreeNode::Hash(_)), "expected a hash node");
                     }
