@@ -98,7 +98,7 @@ impl DatabaseHeader {
         }
 
         let chunks_required = (self.savepoint.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
-        chunks_required * CHUNK_SIZE
+        std::cmp::max(chunks_required * CHUNK_SIZE, HEADER_SIZE)
     }
 }
 
@@ -200,9 +200,9 @@ impl<H: NodeHasher> Database<H> {
     }
 
     pub fn begin_read(&self) -> Result<ReadTransaction<H>> {
-        let result = Self::recover_header(&self.file)?;
+        let (header, _) = Self::recover_header(&self.file)?;
         // Use the stored configuration
-        Ok(ReadTransaction::new(self.clone(), result.0.savepoint))
+        Ok(ReadTransaction::new(self.clone(), header.savepoint))
     }
 
     pub(crate) fn load_node(&self, id: Record) -> Result<NodeInner> {

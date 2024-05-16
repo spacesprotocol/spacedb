@@ -36,9 +36,8 @@ pub struct WriteTransaction<'db, H: NodeHasher> {
 #[derive(Clone)]
 pub struct ReadTransaction<H: NodeHasher> {
     db: Database<H>,
-    root: Record,
+    savepoint: SavePoint,
     cache: Cache,
-    metadata: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -61,21 +60,30 @@ struct SubTreeNodeInfo {
 impl<H: NodeHasher> ReadTransaction<H> {
     pub(crate) fn new(db: Database<H>, savepoint: SavePoint) -> Self {
         let cache_size = db.config.cache_size;
+        let root = savepoint.root;
 
         Self {
             db,
-            root: savepoint.root,
-            cache: Cache::new(savepoint.root, cache_size),
-            metadata: savepoint.metadata,
+            savepoint,
+            cache: Cache::new(root, cache_size),
         }
     }
 
     pub fn iter(&self) -> KeyIterator<H> {
-        KeyIterator::new(self.db.clone(), self.root)
+        KeyIterator::new(self.db.clone(), self.savepoint.root)
+    }
+
+    pub fn rollback(&self) -> Result<()> {
+        let mut header = self.db.header.lock().expect("acquire lock");
+        header.savepoint = self.savepoint.clone();
+
+        self.db.write_header(&header)?;
+        self.db.file.set_len(header.len())?;
+        Ok(())
     }
 
     pub fn metadata(&self) -> &[u8] {
-        match &self.metadata {
+        match &self.savepoint.metadata {
             None => &[],
             Some(meta) => meta.as_slice()
         }
@@ -131,7 +139,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
     }
 
     fn is_empty(&self) -> bool {
-        self.root == EMPTY_RECORD
+        self.savepoint.root == EMPTY_RECORD
     }
 
     fn prove_nodes(
