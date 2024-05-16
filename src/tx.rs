@@ -60,10 +60,12 @@ struct SubTreeNodeInfo {
 
 impl<H: NodeHasher> ReadTransaction<H> {
     pub(crate) fn new(db: Database<H>, savepoint: SavePoint) -> Self {
+        let cache_size = db.config.cache_size;
+
         Self {
-            db: db.clone(),
+            db,
             root: savepoint.root,
-            cache: Cache::new(savepoint.root, db.config.cache_size),
+            cache: Cache::new(savepoint.root, cache_size),
             metadata: savepoint.metadata,
         }
     }
@@ -80,6 +82,10 @@ impl<H: NodeHasher> ReadTransaction<H> {
     }
 
     pub fn get(&mut self, key: &Hash) -> Result<Option<Vec<u8>>> {
+        if self.is_empty() {
+            return Ok(None)
+        }
+
         let mut node = self.cache.node.take().unwrap();
         let result = Self::get_node(&self.db, &mut self.cache, &mut node, Path(key), 0);
         self.cache.node = Some(node);
@@ -87,12 +93,11 @@ impl<H: NodeHasher> ReadTransaction<H> {
     }
 
     pub fn root(&mut self) -> Result<Hash> {
-        let mut n = self.cache.node.take().unwrap();
-        if n.id == EMPTY_RECORD {
-            self.cache.node = Some(n);
+        if self.is_empty() {
             return Ok(H::hash(&[]));
         }
 
+        let mut n = self.cache.node.take().unwrap();
         let h = {
             let entry = Self::hash_node(&self.db, &mut self.cache, &mut n)?;
             entry.node.hash_cache.clone().unwrap()
@@ -102,11 +107,11 @@ impl<H: NodeHasher> ReadTransaction<H> {
     }
 
     pub fn prove(&mut self, keys: &[Hash], proof_type: ProofType) -> Result<SubTree<H>> {
-        let mut node = self.cache.node.take().unwrap();
-        if node.id == EMPTY_RECORD {
+        if self.is_empty() {
             return Ok(SubTree::<H>::empty());
         }
 
+        let mut node = self.cache.node.take().unwrap();
         let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
         key_paths.sort();
 
@@ -123,6 +128,10 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 Err(e)
             }
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.root == EMPTY_RECORD
     }
 
     fn prove_nodes(
@@ -676,6 +685,10 @@ impl<'db, H: NodeHasher> Iterator for KeyIterator<H> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let record = self.stack.pop()?;
+        if record == EMPTY_RECORD {
+            return None;
+        }
+
         match self.db.load_node(record) {
             Ok(inner) => match inner {
                 NodeInner::Leaf { key, value } => Some(Ok((key.0, value))),

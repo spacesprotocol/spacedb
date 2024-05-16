@@ -121,6 +121,9 @@ fn it_should_iterate_over_tree() {
 #[test]
 fn it_returns_none_when_key_not_exists() {
     let db = Database::memory().unwrap();
+    let mut snapshot = db.begin_read().unwrap();
+    assert_eq!(snapshot.get(&[0u8; 32]).unwrap(), None, "empty tree should return none");
+
     let mut tx = db.begin_write().unwrap();
     let key = db.hash(&[]);
     let value = "some data".as_bytes().to_vec();
