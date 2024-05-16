@@ -244,7 +244,7 @@ fn it_should_delete_elements_from_subtree() {
 fn it_should_store_metadata() {
     let db = Database::memory().unwrap();
     let mut tx = db.begin_write().unwrap();
-    tx.set_metadata("snapshot 0".as_bytes().to_vec()).unwrap();
+    tx.metadata("snapshot 0".as_bytes().to_vec()).unwrap();
     tx.commit().unwrap();
 
     let snapshot = db.begin_read().unwrap();
@@ -256,7 +256,7 @@ fn it_should_store_metadata() {
         let value = format!("data{}", i).as_bytes().to_vec();
         tx.insert(key, value.clone()).unwrap();
     }
-    tx.set_metadata("snapshot 1".as_bytes().to_vec()).unwrap();
+    tx.metadata("snapshot 1".as_bytes().to_vec()).unwrap();
     tx.commit().unwrap();
 
     let snapshot = db.begin_read().unwrap();

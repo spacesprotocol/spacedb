@@ -364,7 +364,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         }
     }
 
-    pub fn set_metadata(&mut self, metadata: Vec<u8>) -> Result<()> {
+    pub fn metadata(&mut self, metadata: Vec<u8>) -> Result<()> {
         if metadata.len() > 512 {
             return Err(io::Error::new(io::ErrorKind::Other, "metadata must not exceed 512 bytes").into());
         }
