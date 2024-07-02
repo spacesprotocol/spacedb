@@ -93,9 +93,6 @@ impl DatabaseHeader {
     }
 
     pub(crate) fn len(&self) -> u64 {
-        if self.savepoint.is_empty() {
-            return HEADER_SIZE;
-        }
 
         let chunks_required = (self.savepoint.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
         std::cmp::max(chunks_required * CHUNK_SIZE, HEADER_SIZE)
@@ -285,10 +282,14 @@ impl SavePoint {
     pub fn len(&self) -> u64 {
         let meta_size = match &self.metadata {
             None => 0,
-            Some(m) => m.len()
+            Some(m) =>  {
+                bincode::encode_to_vec(m, config::standard()).unwrap().len()
+            }
         } as u64;
         let root_size = self.root.offset + self.root.size as u64;
-        meta_size + root_size
+        let save_point_size = self.previous_savepoint.offset + self.previous_savepoint.size as u64;
+
+        meta_size + std::cmp::max(root_size, save_point_size)
     }
 }
 
