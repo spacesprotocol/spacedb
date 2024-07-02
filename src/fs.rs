@@ -306,7 +306,7 @@ impl StorageBackend for MemoryBackend {
 
 pub struct WriteBuffer<'file, const SIZE: usize> {
     file: &'file Box<dyn StorageBackend>,
-    buffer: [u8; SIZE],
+    buffer: Box<[u8; SIZE]>,
     len: usize,
     file_len: u64,
 }
@@ -315,7 +315,7 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
     pub(crate) fn new(file: &'file Box<dyn StorageBackend>, file_len: u64) -> Self {
         Self {
             file,
-            buffer: [0u8; SIZE],
+            buffer: Box::new([0u8; SIZE]),
             len: 0,
             file_len,
         }

@@ -76,7 +76,6 @@ impl<H: NodeHasher> ReadTransaction<H> {
     pub fn rollback(&self) -> Result<()> {
         let mut header = self.db.header.lock().expect("acquire lock");
         header.savepoint = self.savepoint.clone();
-
         self.db.write_header(&header)?;
         self.db.file.set_len(header.len())?;
         Ok(())
@@ -347,6 +346,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
     }
 }
 
+
 impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
     pub(crate) fn new(db: &'db Database<H>) -> Self {
         let head = db.header.lock().unwrap();
@@ -385,14 +385,16 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         Ok(())
     }
 
-    pub fn delete(&mut self, key: Hash) -> Result<()> {
+    pub fn delete(&mut self, key: Hash) -> Result<Option<Vec<u8>>> {
         if self.state.is_none() {
-            return Ok(());
+            return Ok(None);
         }
 
         let state = self.state.take().unwrap();
-        self.state = self.delete_node(state, Path(key), 0)?;
-        Ok(())
+        let (node, value) = self.delete_node(state, Path(key), 0)?;
+        self.state = node;
+
+        Ok(value)
     }
 
     fn insert_into_node(
@@ -505,16 +507,17 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         node: Node,
         key: Path<Hash>,
         depth: usize,
-    ) -> Result<Option<Node>> {
+    ) -> Result<(Option<Node>, Option<Vec<u8>>)> {
         let inner = self.read_inner(node)?;
         return match inner {
             NodeInner::Leaf {
-                key: node_key, ..
+                key: node_key, value
             } => {
                 if node_key != key {
-                    return Err(io::ErrorKind::NotFound.into());
+                    let node = Node::from_leaf(node_key, value);
+                    return Ok((Some(node), None));
                 }
-                Ok(None)
+                Ok((None, Some(value)))
             }
             NodeInner::Internal {
                 prefix,
@@ -525,32 +528,32 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
                 // Traverse further based on the direction
                 match key.direction(depth) {
                     Direction::Right => {
-                        let right_subtree = self.delete_node(*right, key, depth + 1)?;
+                        let (right_subtree, value) = self.delete_node(*right, key, depth + 1)?;
                         match right_subtree {
                             None => {
                                 // Right subtree was deleted, move left subtree up
                                 let left_subtree = self.read_inner(*left)?;
-                                Ok(Some(self.lift_node(prefix, left_subtree, Direction::Left)))
+                                Ok((Some(self.lift_node(prefix, left_subtree, Direction::Left)), value))
                             }
                             Some(right_subtree) => {
-                                Ok(Some(
+                                Ok((Some(
                                     Node::from_internal(prefix, left, Box::new(right_subtree))
-                                ))
+                                ), value))
                             }
                         }
                     }
                     Direction::Left => {
-                        let left_subtree = self.delete_node(*left, key, depth + 1)?;
+                        let (left_subtree, value) = self.delete_node(*left, key, depth + 1)?;
                         return match left_subtree {
                             None => {
                                 // Left subtree was deleted, move right subtree up
                                 let right_subtree = self.read_inner(*right)?;
-                                Ok(Some(self.lift_node(prefix, right_subtree, Direction::Right)))
+                                Ok((Some(self.lift_node(prefix, right_subtree, Direction::Right)), value))
                             }
                             Some(left_subtree) => {
-                                Ok(Some(
+                                Ok((Some(
                                     Node::from_internal(prefix, Box::new(left_subtree), right)
-                                ))
+                                ), value))
                             }
                         };
                     }
