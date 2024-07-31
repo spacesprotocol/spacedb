@@ -25,12 +25,11 @@ fn it_works_with_empty_trees() {
 #[test]
 fn it_inserts_into_tree() {
     let db = Database::memory().unwrap();
-    let mut tx = db.begin_write().unwrap();
+    let tx = db.begin_write().unwrap();
     let key = db.hash(&[]);
     let value = "some data".as_bytes().to_vec();
 
-    tx.insert(key.clone(), value.clone()).unwrap();
-    tx.commit().unwrap();
+    tx.insert(key.clone(), value.clone()).unwrap().commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
 
@@ -59,7 +58,7 @@ fn it_inserts_many_items_into_tree() {
         keys.push(key.clone());
         let value = format!("data{}", i).as_bytes().to_vec();
 
-        tx.insert(key.clone(), value.clone()).unwrap();
+        tx = tx.insert(key.clone(), value.clone()).unwrap();
         subtree.insert(key, ValueOrHash::Value(value)).unwrap();
     }
 
@@ -94,7 +93,7 @@ fn it_should_iterate_over_tree() {
     for i in 0..n {
         let key = Sha256Hasher::hash(format!("key{}", i).as_bytes());
         let value = format!("data{}", i).as_bytes().to_vec();
-        tx.insert(key, value.clone()).unwrap();
+        tx = tx.insert(key, value.clone()).unwrap();
         inserted_values.insert(String::from_utf8(value).unwrap());
     }
 
@@ -127,7 +126,7 @@ fn it_returns_none_when_key_not_exists() {
     let key = db.hash(&[]);
     let value = "some data".as_bytes().to_vec();
 
-    tx.insert(key.clone(), value.clone()).unwrap();
+    tx = tx.insert(key.clone(), value.clone()).unwrap();
     tx.commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
@@ -163,7 +162,7 @@ fn it_should_delete_elements_from_snapshot() {
     let db = Database::memory().unwrap();
     let mut tx = db.begin_write().unwrap();
     for key in initial_set {
-        tx.insert(u32_to_key(key), vec![0]).unwrap();
+        tx = tx.insert(u32_to_key(key), vec![0]).unwrap();
     }
     tx.commit().unwrap();
 
@@ -172,7 +171,7 @@ fn it_should_delete_elements_from_snapshot() {
     // add all elements that we wish to delete
     let mut tx = db.begin_write().unwrap();
     for key in &keys_to_delete {
-        tx.insert(u32_to_key(*key), vec![0]).unwrap();
+        tx = tx.insert(u32_to_key(*key), vec![0]).unwrap();
     }
     tx.commit().unwrap();
 
@@ -181,7 +180,7 @@ fn it_should_delete_elements_from_snapshot() {
 
     let mut tx = db.begin_write().unwrap();
     for key in &keys_to_delete {
-        tx.delete(u32_to_key(*key)).unwrap();
+        tx = tx.delete(u32_to_key(*key)).unwrap();
     }
     tx.commit().unwrap();
 
@@ -212,7 +211,7 @@ fn it_should_delete_elements_from_subtree() {
     let db = Database::memory().unwrap();
     let mut tx = db.begin_write().unwrap();
     for key in initial_set {
-        tx.insert(u32_to_key(key), vec![0]).unwrap();
+        tx = tx.insert(u32_to_key(key), vec![0]).unwrap();
     }
     tx.commit().unwrap();
 
@@ -221,7 +220,7 @@ fn it_should_delete_elements_from_subtree() {
     // Add all elements that we wish to delete as well
     let mut tx = db.begin_write().unwrap();
     for key in &keys_to_delete {
-        tx.insert(u32_to_key(*key), vec![0]).unwrap();
+        tx = tx.insert(u32_to_key(*key), vec![0]).unwrap();
     }
     tx.commit().unwrap();
 
@@ -254,7 +253,7 @@ fn it_should_store_metadata() {
     for i in 0..100 {
         let key = Sha256Hasher::hash(format!("key{}", i).as_bytes());
         let value = format!("data{}", i).as_bytes().to_vec();
-        tx.insert(key, value.clone()).unwrap();
+        tx = tx.insert(key, value.clone()).unwrap();
     }
     tx.metadata("snapshot 1".as_bytes().to_vec()).unwrap();
     tx.commit().unwrap();
@@ -281,7 +280,7 @@ fn it_should_rollback() -> spacedb::Result<()> {
     for snapshot_index in 0..snapshots_len {
         let mut tx = db.begin_write()?;
         for entry in 0..items_per_snapshot {
-            tx.insert(u32_to_key((snapshot_index * entry) as u32), entry.to_be_bytes().to_vec())?;
+            tx = tx.insert(u32_to_key((snapshot_index * entry) as u32), entry.to_be_bytes().to_vec())?;
         }
         tx.commit()?;
     }
