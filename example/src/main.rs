@@ -9,7 +9,7 @@ fn main() -> Result<()> {
     for i in 0..100 {
         let key = format!("key{}", i);
         let value = format!("value{}", i);
-        tx.insert(db.hash(key.as_bytes()), value.into_bytes())?;
+        tx = tx.insert(db.hash(key.as_bytes()), value.into_bytes())?;
     }
     tx.commit()?;
 
