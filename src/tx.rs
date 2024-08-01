@@ -373,28 +373,26 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         Ok(())
     }
 
-    pub fn insert(&mut self, key: Hash, value: Vec<u8>) -> Result<()> {
+    pub fn insert(mut self, key: Hash, value: Vec<u8>) -> Result<Self> {
         if self.state.is_none() {
             self.state = Some(Node::from_leaf(Path(key), value));
-            return Ok(());
+            return Ok(self);
         }
 
         let mut state = self.state.take().unwrap();
         state = self.insert_into_node(state, Path(key), value, 0)?;
         self.state = Some(state);
-        Ok(())
+        Ok(self)
     }
 
-    pub fn delete(&mut self, key: Hash) -> Result<Option<Vec<u8>>> {
+    pub fn delete(mut self, key: Hash) -> Result<Self> {
         if self.state.is_none() {
-            return Ok(None);
+            return Ok(self);
         }
 
         let state = self.state.take().unwrap();
-        let (node, value) = self.delete_node(state, Path(key), 0)?;
-        self.state = node;
-
-        Ok(value)
+        self.state = self.delete_node(state, Path(key), 0)?;
+        Ok(self)
     }
 
     fn insert_into_node(
@@ -507,7 +505,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         node: Node,
         key: Path<Hash>,
         depth: usize,
-    ) -> Result<(Option<Node>, Option<Vec<u8>>)> {
+    ) -> Result<Option<Node>> {
         let inner = self.read_inner(node)?;
         return match inner {
             NodeInner::Leaf {
@@ -515,9 +513,9 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
             } => {
                 if node_key != key {
                     let node = Node::from_leaf(node_key, value);
-                    return Ok((Some(node), None));
+                    return Ok(Some(node));
                 }
-                Ok((None, Some(value)))
+                Ok(None)
             }
             NodeInner::Internal {
                 prefix,
@@ -528,32 +526,32 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
                 // Traverse further based on the direction
                 match key.direction(depth) {
                     Direction::Right => {
-                        let (right_subtree, value) = self.delete_node(*right, key, depth + 1)?;
+                        let right_subtree = self.delete_node(*right, key, depth + 1)?;
                         match right_subtree {
                             None => {
                                 // Right subtree was deleted, move left subtree up
                                 let left_subtree = self.read_inner(*left)?;
-                                Ok((Some(self.lift_node(prefix, left_subtree, Direction::Left)), value))
+                                Ok(Some(self.lift_node(prefix, left_subtree, Direction::Left)))
                             }
                             Some(right_subtree) => {
-                                Ok((Some(
+                                Ok(Some(
                                     Node::from_internal(prefix, left, Box::new(right_subtree))
-                                ), value))
+                                ))
                             }
                         }
                     }
                     Direction::Left => {
-                        let (left_subtree, value) = self.delete_node(*left, key, depth + 1)?;
+                        let left_subtree = self.delete_node(*left, key, depth + 1)?;
                         return match left_subtree {
                             None => {
                                 // Left subtree was deleted, move right subtree up
                                 let right_subtree = self.read_inner(*right)?;
-                                Ok((Some(self.lift_node(prefix, right_subtree, Direction::Right)), value))
+                                Ok(Some(self.lift_node(prefix, right_subtree, Direction::Right)))
                             }
                             Some(left_subtree) => {
-                                Ok((Some(
+                                Ok(Some(
                                     Node::from_internal(prefix, Box::new(left_subtree), right)
-                                ), value))
+                                ))
                             }
                         };
                     }
@@ -774,10 +772,10 @@ mod tests {
     fn test_extended_proofs() {
         let db = Database::memory().unwrap();
         let mut tx = db.begin_write().unwrap();
-        tx.insert([0b1000_0000u8; 32], vec![1]).unwrap();
-        tx.insert([0b1100_0000u8; 32], vec![2]).unwrap();
-        tx.insert([0b0000_0000u8; 32], vec![3]).unwrap();
-        tx.commit().unwrap();
+        tx.insert([0b1000_0000u8; 32], vec![1]).unwrap()
+          .insert([0b1100_0000u8; 32], vec![2]).unwrap()
+          .insert([0b0000_0000u8; 32], vec![3]).unwrap()
+          .commit().unwrap();
 
         let mut snapshot = db.begin_read().unwrap();
         let standard_subtree = snapshot.prove(&[[0u8; 32]], ProofType::Standard).unwrap();

@@ -138,26 +138,29 @@ impl<T: AsMut<[u8]>> PathSegment<T> {
 
         raw[0] = new_bit_len;
         let inner = &mut raw[1..];
+        let unfilled_bits = 8 - (current_bit_len % 8);
 
-        // Get the number of remaining bit slots in the byte array
-        // If the current bit length is a multiple of 8, this will just be 8-bits.
-        let remaining_slots = 8 - (current_bit_len % 8);
-
-        // If multiples of 8, index will point to the next unfilled byte,
+        // If multiple of 8, index will point to the next unfilled byte,
         // otherwise it will point to the last partially filled byte.
         let mut index = (current_bit_len / 8) as usize;
 
-        // We have to fill the remaining slots in the existing byte
-        if len <= remaining_slots {
-            inner[index] |= bits >> (8 - len) << (remaining_slots - len);
+        if len <= unfilled_bits {
+            // All new bits fit in the current byte
+            inner[index] |= bits >> (8 - len) << (unfilled_bits - len);
         } else {
-            inner[index] |= bits >> (8 - remaining_slots);
+            // New bits span over two bytes
+            inner[index] |= bits >> (8 - unfilled_bits);
 
             // carry over any remaining bits to a new byte
             index += 1;
-            let remaining_bits = len - remaining_slots;
-            assert!(inner.len() > index, "not enough space");
-            inner[index] = bits >> (8 - remaining_bits) << remaining_slots;
+            assert!(inner.len() > index, "could not fit all bits");
+            inner[index] = bits << unfilled_bits;
+        }
+
+        // Clear any trailing bits in the last byte
+        let last_byte_bits = new_bit_len % 8;
+        if last_byte_bits != 0 {
+            inner[index] &= 0xFF << (8 - last_byte_bits);
         }
     }
 
@@ -336,6 +339,19 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut parent = PathSegment([0u8;33]);
+        parent.set_len(5);
+
+        let mut child = PathSegment([0u8;33]);
+        child.set_len(10);
+        child.0[1] = 0b1111_1010;
+
+        parent.extend(child);
+        assert_eq!(parent.to_string(), "000001111101000");
     }
 
     #[test]
