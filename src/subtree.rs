@@ -48,7 +48,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    pub fn root(&self) -> Result<Hash> {
+    pub fn compute_root(&self) -> Result<Hash> {
         if self.is_empty() {
             return Ok(H::hash(&[]));
         }

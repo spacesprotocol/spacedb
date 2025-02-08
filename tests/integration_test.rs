@@ -8,13 +8,13 @@ fn it_works_with_empty_trees() {
     let db = Database::memory().unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let root = snapshot.root().unwrap();
+    let root = snapshot.compute_root().unwrap();
     assert_eq!(root, db.hash(&[]), "empty tree must return zero hash");
     let foo = db.hash("foo".as_bytes());
     let subtree = snapshot.prove(&[foo], ProofType::Standard).unwrap();
 
     assert_eq!(
-        subtree.root().unwrap(),
+        subtree.compute_root().unwrap(),
         root,
         "empty subtree must return zero hash"
     );
@@ -37,8 +37,8 @@ fn it_inserts_into_tree() {
     subtree.insert(key, ValueOrHash::Value(value)).unwrap();
 
     assert_eq!(
-        subtree.root().unwrap(),
-        tree.root().unwrap(),
+        subtree.compute_root().unwrap(),
+        tree.compute_root().unwrap(),
         "subtree root != tree root"
     )
 }
@@ -69,15 +69,15 @@ fn it_inserts_many_items_into_tree() {
     let subtree2 = tree.prove(&keys, ProofType::Standard).unwrap();
 
     assert_eq!(
-        subtree2.root().unwrap(),
-        tree.root().unwrap(),
+        subtree2.compute_root().unwrap(),
+        tree.compute_root().unwrap(),
         "subtree2 != tree"
     );
 
     // Compare the root hash of the subtree and the main tree
     assert_eq!(
-        subtree.root().unwrap(),
-        tree.root().unwrap(),
+        subtree.compute_root().unwrap(),
+        tree.compute_root().unwrap(),
         "subtree root != tree root after inserting many items"
     );
 }
@@ -166,7 +166,7 @@ fn it_should_delete_elements_from_snapshot() {
     }
     tx.commit().unwrap();
 
-    let expected_root_after_deletion = db.begin_read().unwrap().root().unwrap();
+    let expected_root_after_deletion = db.begin_read().unwrap().compute_root().unwrap();
 
     // add all elements that we wish to delete
     let mut tx = db.begin_write().unwrap();
@@ -175,7 +175,7 @@ fn it_should_delete_elements_from_snapshot() {
     }
     tx.commit().unwrap();
 
-    let root_with_entire_sample_size = db.begin_read().unwrap().root().unwrap();
+    let root_with_entire_sample_size = db.begin_read().unwrap().compute_root().unwrap();
     assert_ne!(expected_root_after_deletion, root_with_entire_sample_size);
 
     let mut tx = db.begin_write().unwrap();
@@ -184,7 +184,7 @@ fn it_should_delete_elements_from_snapshot() {
     }
     tx.commit().unwrap();
 
-    let actual_root_after_deletion = db.begin_read().unwrap().root().unwrap();
+    let actual_root_after_deletion = db.begin_read().unwrap().compute_root().unwrap();
     assert_eq!(expected_root_after_deletion, actual_root_after_deletion);
 }
 
@@ -215,7 +215,7 @@ fn it_should_delete_elements_from_subtree() {
     }
     tx.commit().unwrap();
 
-    let expected_root_after_deletion = db.begin_read().unwrap().root().unwrap();
+    let expected_root_after_deletion = db.begin_read().unwrap().compute_root().unwrap();
 
     // Add all elements that we wish to delete as well
     let mut tx = db.begin_write().unwrap();
@@ -224,7 +224,7 @@ fn it_should_delete_elements_from_subtree() {
     }
     tx.commit().unwrap();
 
-    let root_with_entire_sample_size = db.begin_read().unwrap().root().unwrap();
+    let root_with_entire_sample_size = db.begin_read().unwrap().compute_root().unwrap();
     assert_ne!(expected_root_after_deletion, root_with_entire_sample_size);
 
     let key_hashes: Vec<Hash> = keys_to_delete.iter().map(|k: &u32| u32_to_key(*k)).collect();
@@ -235,7 +235,7 @@ fn it_should_delete_elements_from_subtree() {
         subtree = subtree.delete(&kh).unwrap()
     }
 
-    let subtree_root = subtree.root().unwrap();
+    let subtree_root = subtree.compute_root().unwrap();
     assert_eq!(expected_root_after_deletion, subtree_root);
 }
 
@@ -287,7 +287,7 @@ fn it_should_rollback() -> spacedb::Result<()> {
 
     let mut roots = Vec::with_capacity(snapshots_len);
     for snapshot in db.iter() {
-        roots.push(snapshot?.root()?)
+        roots.push(snapshot?.compute_root()?)
     }
     assert_eq!(roots.len(), snapshots_len, "expected roots == snapshots len");
 
@@ -298,7 +298,7 @@ fn it_should_rollback() -> spacedb::Result<()> {
     // confirm we still have the same snapshot
     let mut snapshot = db.begin_read()?;
 
-    assert_eq!(&snapshot.root()?, roots.first().unwrap(), "bad roots");
+    assert_eq!(&snapshot.compute_root()?, roots.first().unwrap(), "bad roots");
 
     // rollback the 6th snapshot
     db.iter().skip(5).next().unwrap()?.rollback()?;
@@ -307,6 +307,6 @@ fn it_should_rollback() -> spacedb::Result<()> {
 
     // db should now point to the snapshot we just rolled back
     let mut snapshot = db.begin_read()?;
-    assert_eq!(&snapshot.root()?, roots.iter().skip(5).next().unwrap(), "bad roots");
+    assert_eq!(&snapshot.compute_root()?, roots.iter().skip(5).next().unwrap(), "bad roots");
     Ok(())
 }
