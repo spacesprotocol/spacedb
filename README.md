@@ -96,7 +96,28 @@ spacedb = { version = "0.1", default-features = false }
 ```
 
 
+## Using Subtrees in wasm
 
+If building from source: 
+
+```
+wasm-pack build --target nodejs --features wasm --no-default-features
+```
+
+then:
+
+```javascript
+import { SubTree } from "../pkg/spacedb.js";
+
+const raw = new Uint8Array(/* proof data */); // or null for an empty subtree
+const subtree = new SubTree(raw);
+
+const root = subtree.compute_root();
+console.log("Root hash:", Buffer.from(root).toString('hex'));
+
+console.log("entries: ", subtree.entries());
+
+```
 
 ## Key Iteration
 

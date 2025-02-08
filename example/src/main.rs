@@ -15,7 +15,7 @@ fn main() -> Result<()> {
 
     // Get the committed snapshot
     let mut snapshot = db.begin_read()?;
-    println!("Tree root: {}", hex::encode(snapshot.root()?));
+    println!("Tree root: {}", hex::encode(snapshot.compute_root()?));
 
     // Prove a subset of the keys
     let keys_to_prove: Vec<_> = (0..10)
@@ -29,7 +29,7 @@ fn main() -> Result<()> {
     let subtree = snapshot.prove(&keys_to_prove, ProofType::Standard)?;
 
     // Will have the exact same root as the snapshot
-    println!("Subtree root: {}", hex::encode(subtree.root().unwrap()));
+    println!("Subtree root: {}", hex::encode(subtree.compute_root().unwrap()));
 
     // Prove inclusion
     assert!(subtree.contains(&db.hash("key0".as_bytes())).unwrap());

@@ -1,6 +1,9 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 
+use core::marker::PhantomData;
+use sha2::{Digest as _, Sha256};
+
 pub mod path;
 pub mod subtree;
 
@@ -16,13 +19,46 @@ pub mod tx;
 #[cfg(feature = "std")]
 pub mod fs;
 
+pub mod encode;
+pub mod wasm;
+
+pub type Hash = [u8; 32];
+
+const LEAF_TAG: u8 = 0x00;
+const INTERNAL_TAG: u8 = 0x01;
+
+#[derive(Clone)]
+pub struct Sha256Hasher;
+
+const DEFAULT_CACHE_SIZE: usize = 1024 * 1024 * 1024; /* 1GB */
+
 pub type Result<T> = core::result::Result<T, Error>;
+
+#[derive(Clone, Debug)]
+pub struct Configuration<Hasher: NodeHasher> {
+    pub cache_size: usize,
+    _marker: PhantomData<Hasher>,
+}
 
 #[derive(Debug)]
 pub enum Error {
     #[cfg(feature = "std")]
     IO(std::io::Error),
     Verify(VerifyError),
+    Encode(EncodeError),
+}
+
+#[derive(Debug)]
+pub enum VerifyError {
+    KeyExists,
+    IncompleteProof,
+    KeyNotFound,
+}
+
+#[derive(Debug)]
+pub enum EncodeError {
+    BufferTooSmall,
+    InvalidData(&'static str)
 }
 
 impl core::fmt::Display for Error {
@@ -31,6 +67,7 @@ impl core::fmt::Display for Error {
             #[cfg(feature = "std")]
             Error::IO(err) => write!(f, "IO error: {}", err),
             Error::Verify(err) => write!(f, "Verification error: {}", err),
+            Error::Encode(err) => write!(f, "Encode error: {}", err)
         }
     }
 }
@@ -48,31 +85,13 @@ impl core::fmt::Display for VerifyError {
 #[cfg(feature = "std")]
 impl std::error::Error for Error {}
 
-
-#[derive(Debug)]
-pub enum VerifyError {
-    KeyExists,
-    IncompleteProof,
-    KeyNotFound,
-}
-
-use core::marker::PhantomData;
-use sha2::{Digest as _, Sha256};
-
-pub type Hash = [u8; 32];
-
-const LEAF_TAG: u8 = 0x00;
-const INTERNAL_TAG: u8 = 0x01;
-
-#[derive(Clone)]
-pub struct Sha256Hasher;
-
-const DEFAULT_CACHE_SIZE: usize = 1024 * 1024 * 1024; /* 1GB */
-
-#[derive(Clone, Debug)]
-pub struct Configuration<Hasher: NodeHasher> {
-    pub cache_size: usize,
-    _marker: PhantomData<Hasher>,
+impl core::fmt::Display for EncodeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
+        match self {
+            EncodeError::BufferTooSmall => write!(f, "Buffer too small"),
+            EncodeError::InvalidData(str) => write!(f, "Invalid data: {}", *str),
+        }
+    }
 }
 
 impl<Hasher: NodeHasher> Configuration<Hasher> {

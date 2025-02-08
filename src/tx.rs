@@ -99,7 +99,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         result
     }
 
-    pub fn root(&mut self) -> Result<Hash> {
+    pub fn compute_root(&mut self) -> Result<Hash> {
         if self.is_empty() {
             return Ok(H::hash(&[]));
         }
