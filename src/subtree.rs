@@ -342,8 +342,8 @@ impl<H: NodeHasher> Encode for SubTree<H> {
     }
 }
 
-impl<H: NodeHasher> Decode for SubTree<H> {
-    fn decode<D: Decoder>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
+impl<H: NodeHasher, Context> Decode<Context> for SubTree<H> {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
         let root = Decode::decode(decoder)?;
         Ok(Self {
             root,
@@ -382,8 +382,8 @@ impl Encode for SubTreeNode {
     }
 }
 
-impl Decode for SubTreeNode {
-    fn decode<D: Decoder>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
+impl<Context> Decode<Context> for SubTreeNode {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
         let tag: u8 = Decode::decode(decoder)?;
         match tag {
             0 => {
@@ -430,8 +430,8 @@ impl Encode for ValueOrHash {
     }
 }
 
-impl Decode for ValueOrHash {
-    fn decode<D: Decoder>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
+impl<Context> Decode<Context> for ValueOrHash {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
         let tag: u8 = Decode::decode(decoder)?;
         match tag {
             0 => {
