@@ -107,8 +107,8 @@ impl Encode for NodeInner {
     }
 }
 
-impl Decode for NodeInner {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for NodeInner {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let tag: u8 = Decode::decode(decoder)?;
         match tag {
             0 => {
@@ -164,8 +164,8 @@ impl Encode for Node {
     }
 }
 
-impl Decode for Node {
-    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, DecodeError> {
+impl<Context> Decode<Context> for Node {
+    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> Result<Self, DecodeError> {
         let id = Decode::decode(decoder)?;
         Ok(Node::from_id(id))
     }
