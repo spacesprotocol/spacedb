@@ -14,9 +14,7 @@ use crate::{
 
 use crate::{db::DatabaseHeader, fs::WriteBuffer};
 
-use crate::{
-    path::{PathSegment, PathSegmentInner},
-};
+use crate::path::{PathSegment, PathSegmentInner};
 
 const BUFFER_SIZE: usize = 16 * 64 * 1024;
 
@@ -771,7 +769,7 @@ mod tests {
     #[test]
     fn test_extended_proofs() {
         let db = Database::memory().unwrap();
-        let mut tx = db.begin_write().unwrap();
+        let tx = db.begin_write().unwrap();
         tx.insert([0b1000_0000u8; 32], vec![1]).unwrap()
           .insert([0b1100_0000u8; 32], vec![2]).unwrap()
           .insert([0b0000_0000u8; 32], vec![3]).unwrap()
