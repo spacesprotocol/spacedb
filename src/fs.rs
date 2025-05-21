@@ -24,8 +24,10 @@ pub trait StorageBackend: Sync + Send {
 pub struct MemoryBackend(RwLock<Vec<u8>>);
 
 #[cfg(any(unix))]
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::FileExt;
+use std::os::{
+    fd::AsRawFd,
+    unix::fs::FileExt,
+};
 
 #[cfg(windows)]
 use std::os::windows::{
@@ -123,7 +125,7 @@ impl StorageBackend for FileBackend {
 
 #[cfg(windows)]
 impl FileBackend {
-    pub fn new(file: File) -> Result<Self, DatabaseError> {
+    pub fn new(file: File) -> Result<Self, io::Error> {
         let handle = file.as_raw_handle();
         unsafe {
             let result = LockFile(handle, 0, 0, u32::MAX, u32::MAX);
