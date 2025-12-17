@@ -5,12 +5,7 @@ use crate::{
 
 use alloc::{boxed::Box, vec, vec::Vec};
 use core::marker::PhantomData;
-use bincode::{
-    de::Decoder,
-    enc::Encoder,
-    error::{DecodeError, EncodeError},
-    impl_borrow_decode, Decode, Encode,
-};
+use borsh::{BorshDeserialize, BorshSerialize, io::{Read, Write}};
 
 #[derive(Clone, Debug)]
 pub struct SubTree<H: NodeHasher> {
@@ -311,7 +306,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    pub fn iter(&self) -> SubtreeIter {
+    pub fn iter(&self) -> SubtreeIter<'_> {
         if self.is_empty() || !value_node(&self.root) {
             return SubtreeIter { stack: vec![] };
         }
@@ -320,7 +315,7 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    pub fn iter_mut(&mut self) -> SubtreeIterMut {
+    pub fn iter_mut(&mut self) -> SubtreeIterMut<'_> {
         if self.is_empty() || !value_node(&self.root) {
             return SubtreeIterMut { stack: vec![] };
         }
@@ -336,15 +331,15 @@ impl SubTreeNode {
     }
 }
 
-impl<H: NodeHasher> Encode for SubTree<H> {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
-        Encode::encode(&self.root, encoder)
+impl<H: NodeHasher> BorshSerialize for SubTree<H> {
+    fn serialize<W: Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
+        self.root.serialize(writer)
     }
 }
 
-impl<H: NodeHasher, Context> Decode<Context> for SubTree<H> {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
-        let root = Decode::decode(decoder)?;
+impl<H: NodeHasher> BorshDeserialize for SubTree<H> {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        let root = SubTreeNode::deserialize_reader(reader)?;
         Ok(Self {
             root,
             _marker: core::marker::PhantomData,
@@ -352,27 +347,27 @@ impl<H: NodeHasher, Context> Decode<Context> for SubTree<H> {
     }
 }
 
-impl Encode for SubTreeNode {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
+impl BorshSerialize for SubTreeNode {
+    fn serialize<W: Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
         match self {
             SubTreeNode::Leaf { key, value_or_hash } => {
-                Encode::encode(&0u8, encoder)?;
-                Encode::encode(&key.0, encoder)?;
-                Encode::encode(value_or_hash, encoder)?;
+                0u8.serialize(writer)?;
+                key.0.serialize(writer)?;
+                value_or_hash.serialize(writer)?;
             }
             SubTreeNode::Internal {
                 prefix,
                 left,
                 right,
             } => {
-                Encode::encode(&1u8, encoder)?;
-                Encode::encode(&prefix.0, encoder)?;
-                Encode::encode(left, encoder)?;
-                Encode::encode(right, encoder)?;
+                1u8.serialize(writer)?;
+                prefix.0.serialize(writer)?;
+                left.serialize(writer)?;
+                right.serialize(writer)?;
             }
             SubTreeNode::Hash(hash) => {
-                Encode::encode(&2u8, encoder)?;
-                Encode::encode(hash, encoder)?;
+                2u8.serialize(writer)?;
+                hash.serialize(writer)?;
             }
             SubTreeNode::None => {
                 unreachable!("cannot encode a none node")
@@ -382,21 +377,21 @@ impl Encode for SubTreeNode {
     }
 }
 
-impl<Context> Decode<Context> for SubTreeNode {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
-        let tag: u8 = Decode::decode(decoder)?;
+impl BorshDeserialize for SubTreeNode {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        let tag = u8::deserialize_reader(reader)?;
         match tag {
             0 => {
-                let key_raw: Hash = Decode::decode(decoder)?;
+                let key_raw: Hash = BorshDeserialize::deserialize_reader(reader)?;
                 let key = Path(key_raw);
-                let value_or_hash = Decode::decode(decoder)?;
+                let value_or_hash = ValueOrHash::deserialize_reader(reader)?;
                 Ok(SubTreeNode::Leaf { key, value_or_hash })
             }
             1 => {
-                let seg: [u8; 33] = Decode::decode(decoder)?;
+                let seg: [u8; 33] = BorshDeserialize::deserialize_reader(reader)?;
                 let prefix = PathSegment(seg);
-                let left: Box<SubTreeNode> = Decode::decode(decoder)?;
-                let right: Box<SubTreeNode> = Decode::decode(decoder)?;
+                let left: Box<SubTreeNode> = Box::new(SubTreeNode::deserialize_reader(reader)?);
+                let right: Box<SubTreeNode> = Box::new(SubTreeNode::deserialize_reader(reader)?);
                 Ok(SubTreeNode::Internal {
                     prefix,
                     left,
@@ -404,50 +399,52 @@ impl<Context> Decode<Context> for SubTreeNode {
                 })
             }
             2 => {
-                let hash: Hash = Decode::decode(decoder)?;
+                let hash: Hash = BorshDeserialize::deserialize_reader(reader)?;
                 Ok(SubTreeNode::Hash(hash))
             }
-            _ => Err(DecodeError::Other("Invalid tag subtree node")),
+            _ => Err(borsh::io::Error::new(
+                borsh::io::ErrorKind::InvalidData,
+                "Invalid tag for SubTreeNode",
+            )),
         }
     }
 }
 
-impl_borrow_decode!(SubTreeNode);
-
-impl Encode for ValueOrHash {
-    fn encode<E: Encoder>(&self, encoder: &mut E) -> core::result::Result<(), EncodeError> {
+impl BorshSerialize for ValueOrHash {
+    fn serialize<W: Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
         match self {
             ValueOrHash::Value(value) => {
-                Encode::encode(&0u8, encoder)?;
-                Encode::encode(value, encoder)?;
+                0u8.serialize(writer)?;
+                value.serialize(writer)?;
             }
             ValueOrHash::Hash(hash) => {
-                Encode::encode(&1u8, encoder)?;
-                Encode::encode(hash, encoder)?;
+                1u8.serialize(writer)?;
+                hash.serialize(writer)?;
             }
         }
         Ok(())
     }
 }
 
-impl<Context> Decode<Context> for ValueOrHash {
-    fn decode<D: Decoder<Context = Context>>(decoder: &mut D) -> core::result::Result<Self, DecodeError> {
-        let tag: u8 = Decode::decode(decoder)?;
+impl BorshDeserialize for ValueOrHash {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
+        let tag = u8::deserialize_reader(reader)?;
         match tag {
             0 => {
-                let value: Vec<u8> = Decode::decode(decoder)?;
+                let value: Vec<u8> = BorshDeserialize::deserialize_reader(reader)?;
                 Ok(ValueOrHash::Value(value))
             }
             1 => {
-                let hash: Hash = Decode::decode(decoder)?;
+                let hash: Hash = BorshDeserialize::deserialize_reader(reader)?;
                 Ok(ValueOrHash::Hash(hash))
             }
-            _ => Err(DecodeError::Other("Invalid tag")),
+            _ => Err(borsh::io::Error::new(
+                borsh::io::ErrorKind::InvalidData,
+                "Invalid tag for ValueOrHash",
+            )),
         }
     }
 }
-
-impl_borrow_decode!(ValueOrHash);
 
 impl Default for SubTreeNode {
     fn default() -> Self {

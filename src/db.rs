@@ -192,7 +192,7 @@ impl<H: NodeHasher> Database<H> {
         Ok(save_point)
     }
 
-    pub fn begin_write(&self) -> Result<WriteTransaction<H>> {
+    pub fn begin_write(&self) -> Result<WriteTransaction<'_, H>> {
         Ok(WriteTransaction::new(self))
     }
 
@@ -210,7 +210,7 @@ impl<H: NodeHasher> Database<H> {
         Ok(inner)
     }
 
-    pub fn iter(&self) -> SnapshotIterator<H> {
+    pub fn iter(&self) -> SnapshotIterator<'_, H> {
         SnapshotIterator::new(self)
     }
 }
@@ -304,6 +304,6 @@ mod tests {
         let header2 = DatabaseHeader::from_bytes(&bytes).unwrap();
         assert_eq!(header, header2);
 
-        assert_eq!(bytes.len(), 64);
+        assert_eq!(bytes.len(), 39);
     }
 }
