@@ -171,6 +171,10 @@ impl<H: NodeHasher> SubTree<H> {
                     left,
                     right,
                 } => {
+                    // Check if key matches the prefix - if not, key is not in this subtree
+                    if key.split_point(depth, *prefix).is_some() {
+                        return Ok(false);
+                    }
                     depth = depth + prefix.bit_len() as usize;
                     match key.direction(depth) {
                         Direction::Left => node = left,
