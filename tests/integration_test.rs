@@ -4,6 +4,208 @@ use spacedb::tx::{ProofType, ReadTransaction};
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
 #[test]
+fn it_proves_non_existence_single_key_opposite_path() {
+    let db = Database::memory().unwrap();
+
+    // Insert a key starting with bit 1 (0b1xxx_xxxx)
+    let key_with_1 = {
+        let mut k = [0u8; 32];
+        k[0] = 0b1000_0000;
+        k
+    };
+
+    db.begin_write().unwrap()
+        .insert(key_with_1, vec![1, 2, 3]).unwrap()
+        .commit().unwrap();
+
+    // Try to prove a key starting with bit 0 (0b0xxx_xxxx)
+    let key_with_0 = {
+        let mut k = [0u8; 32];
+        k[0] = 0b0000_0000;
+        k
+    };
+
+    let mut snapshot = db.begin_read().unwrap();
+    let tree_root = snapshot.compute_root().unwrap();
+
+    // Generate proof for the non-existent key
+    let subtree = snapshot.prove(&[key_with_0], ProofType::Standard).unwrap();
+
+    // The proof should have the same root as the tree
+    assert_eq!(subtree.compute_root().unwrap(), tree_root);
+
+    // contains should return false for the non-existent key (not error)
+    assert_eq!(subtree.contains(&key_with_0).unwrap(), false);
+
+    // The existing key is still visible in the proof (the leaf node contains its key)
+    // but the value is hashed since we didn't ask for it
+    assert_eq!(subtree.contains(&key_with_1).unwrap(), true);
+}
+
+#[test]
+fn it_proves_non_existence_when_key_diverges_at_prefix() {
+    let db = Database::memory().unwrap();
+
+    // Insert 10 keys all starting with bit 1
+    let mut write = db.begin_write().unwrap();
+    for i in 0u8..10 {
+        let mut k = [0u8; 32];
+        k[0] = 0b1000_0000 | (i >> 1);
+        k[1] = i;
+        write = write.insert(k, vec![i]).unwrap();
+    }
+    write.commit().unwrap();
+
+    // Prove a key starting with bit 0 (completely different subtree)
+    let non_existent = [0u8; 32];  // all zeros
+
+    let mut snapshot = db.begin_read().unwrap();
+    let proof = snapshot.prove(&[non_existent], ProofType::Standard).unwrap();
+
+    let result = proof.contains(&non_existent);
+    println!("contains result: {:?}", result);
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), false);
+}
+
+#[test]
+fn subtree_borsh_serialization_roundtrip() {
+
+    let db = Database::memory().unwrap();
+    let mut write = db.begin_write().unwrap();
+
+    // Insert several keys
+    for i in 0u8..10 {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        write = write.insert(k, vec![i, i + 1, i + 2]).unwrap();
+    }
+    write.commit().unwrap();
+
+    // Create a proof for some keys
+    let keys_to_prove: Vec<Hash> = (0u8..5).map(|i| {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        k
+    }).collect();
+
+    let mut snapshot = db.begin_read().unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&keys_to_prove, ProofType::Standard).unwrap();
+    let original_root = subtree.compute_root().unwrap();
+
+    // Serialize and deserialize
+    let serialized = borsh::to_vec(&subtree).unwrap();
+    let deserialized: SubTree<Sha256Hasher> = borsh::from_slice(&serialized).unwrap();
+
+    // Verify the root is the same
+    assert_eq!(deserialized.compute_root().unwrap(), original_root);
+
+    // Verify contains works on deserialized subtree
+    for key in &keys_to_prove {
+        assert!(deserialized.contains(key).unwrap());
+    }
+
+    // Non-existent key should return false
+    let mut non_existent = [0u8; 32];
+    non_existent[0] = 100;
+    assert!(!deserialized.contains(&non_existent).unwrap());
+}
+
+#[test]
+fn mixed_existence_proof() {
+    let db = Database::memory().unwrap();
+    let mut write = db.begin_write().unwrap();
+
+    // Insert keys 0, 2, 4, 6, 8 (even numbers)
+    for i in (0u8..10).step_by(2) {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        write = write.insert(k, vec![i]).unwrap();
+    }
+    write.commit().unwrap();
+
+    let mut snapshot = db.begin_read().unwrap();
+    let tree_root = snapshot.compute_root().unwrap();
+
+    // Prove a mix of existing (0, 2, 4) and non-existing (1, 3, 5) keys
+    let keys_to_prove: Vec<Hash> = (0u8..6).map(|i| {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        k
+    }).collect();
+
+    let subtree = snapshot.prove(&keys_to_prove, ProofType::Standard).unwrap();
+
+    // Root should match
+    assert_eq!(subtree.compute_root().unwrap(), tree_root);
+
+    // Check existing keys return true
+    for i in (0u8..6).step_by(2) {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        assert!(subtree.contains(&k).unwrap(), "key {} should exist", i);
+    }
+
+    // Check non-existing keys return false (not error)
+    for i in (1u8..6).step_by(2) {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        assert!(!subtree.contains(&k).unwrap(), "key {} should not exist", i);
+    }
+}
+
+#[test]
+fn adjacent_keys_differ_by_one_bit() {
+    let db = Database::memory().unwrap();
+
+    // Two keys that differ only in the last bit
+    let key_a = {
+        let mut k = [0xFFu8; 32];
+        k[31] = 0b1111_1110; // ends in 0
+        k
+    };
+    let key_b = {
+        let mut k = [0xFFu8; 32];
+        k[31] = 0b1111_1111; // ends in 1
+        k
+    };
+
+    db.begin_write().unwrap()
+        .insert(key_a, vec![0xAA]).unwrap()
+        .insert(key_b, vec![0xBB]).unwrap()
+        .commit().unwrap();
+
+    let mut snapshot = db.begin_read().unwrap();
+    let tree_root = snapshot.compute_root().unwrap();
+
+    // Prove only key_a
+    let subtree = snapshot.prove(&[key_a], ProofType::Standard).unwrap();
+    assert_eq!(subtree.compute_root().unwrap(), tree_root);
+    assert!(subtree.contains(&key_a).unwrap());
+    // key_b is a sibling hash node - we can't prove it exists without its own proof
+    assert!(subtree.contains(&key_b).is_err(), "key_b should be incomplete proof");
+
+    // Prove only key_b
+    let mut snapshot = db.begin_read().unwrap();
+    let subtree = snapshot.prove(&[key_b], ProofType::Standard).unwrap();
+    assert_eq!(subtree.compute_root().unwrap(), tree_root);
+    assert!(subtree.contains(&key_b).unwrap());
+    // key_a is a sibling hash node
+    assert!(subtree.contains(&key_a).is_err(), "key_a should be incomplete proof");
+
+    // Prove both keys together
+    let mut snapshot = db.begin_read().unwrap();
+    let subtree = snapshot.prove(&[key_a, key_b], ProofType::Standard).unwrap();
+    assert_eq!(subtree.compute_root().unwrap(), tree_root);
+    assert!(subtree.contains(&key_a).unwrap());
+    assert!(subtree.contains(&key_b).unwrap());
+
+    // A key that differs more significantly should not exist
+    let key_c = [0x00u8; 32];
+    assert!(!subtree.contains(&key_c).unwrap());
+}
+
+#[test]
 fn it_works_with_empty_trees() {
     let db = Database::memory().unwrap();
 
