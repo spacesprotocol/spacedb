@@ -5,6 +5,8 @@ use core::marker::PhantomData;
 use sha2::{Digest as _, Sha256};
 
 pub mod path;
+#[cfg(test)]
+pub mod path_test;
 pub mod subtree;
 
 #[cfg(feature = "std")]
