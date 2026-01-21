@@ -2,7 +2,7 @@ workspace = { members = ["example"] }
 
 [package]
 name = "spacedb"
-version = "0.0.8"
+version = "0.0.9"
 edition = "2021"
 description = "A cryptographically verifiable data store and universal accumulator for the Spaces protocol."
 repository = "https://github.com/spacesprotocol/spacedb"
@@ -29,6 +29,7 @@ rand = "0.8.5"
 version = "0.10.6"
 
 [features]
-default = ["std"]
+default = ["std", "extras"]
 std = ["libc", "hex", "bincode"]
 wasm = ["wasm-bindgen", "js-sys"]
+extras = []
