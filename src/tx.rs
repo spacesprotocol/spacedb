@@ -86,6 +86,100 @@ impl<H: NodeHasher> ReadTransaction<H> {
         }
     }
 
+    /// Exports the current snapshot to a new database file.
+    pub fn export(&self, path: &str) -> Result<()> {
+        use std::fs::OpenOptions;
+        use crate::fs::FileBackend;
+        use crate::db::{DatabaseHeader, HEADER_SIZE};
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
+
+        let export_file: Box<dyn crate::fs::StorageBackend> = Box::new(FileBackend::new(file)?);
+
+        let header = DatabaseHeader::new();
+        export_file.set_len(HEADER_SIZE)?;
+        let header_bytes = header.serialize();
+        export_file.write(0, &header_bytes)?;
+        export_file.write(CHUNK_SIZE, &header_bytes)?;
+
+        let mut buffer: WriteBuffer<BUFFER_SIZE> = WriteBuffer::new(&export_file, HEADER_SIZE);
+
+        let new_root = if self.savepoint.root == EMPTY_RECORD {
+            EMPTY_RECORD
+        } else {
+            self.export_node(&mut buffer, self.savepoint.root)?
+        };
+
+        let empty_savepoint = SavePoint {
+            root: EMPTY_RECORD,
+            previous_savepoint: EMPTY_RECORD,
+            metadata: None,
+        };
+        let previous_savepoint = buffer.write_save_point(&empty_savepoint)?;
+        buffer.flush()?;
+        export_file.sync_data()?;
+
+        let final_savepoint = SavePoint {
+            root: new_root,
+            previous_savepoint,
+            metadata: self.savepoint.metadata.clone(),
+        };
+
+        let final_header = DatabaseHeader {
+            magic: header.magic,
+            version: header.version,
+            savepoint: final_savepoint,
+        };
+        let header_bytes = final_header.serialize();
+        export_file.write(0, &header_bytes)?;
+        export_file.write(CHUNK_SIZE, &header_bytes)?;
+        export_file.sync_data()?;
+
+        Ok(())
+    }
+
+    fn export_node<const SIZE: usize>(
+        &self,
+        buffer: &mut WriteBuffer<SIZE>,
+        record: Record,
+    ) -> Result<Record> {
+        use crate::node::NodeInner;
+
+        let inner = self.db.load_node(record)?;
+
+        match inner {
+            NodeInner::Leaf { key, value } => {
+                let mut node = Node::from_leaf(key, value);
+                Ok(buffer.write_node(&mut node)?)
+            }
+            NodeInner::Internal { prefix, left, right } => {
+                let new_left = if left.id == EMPTY_RECORD {
+                    EMPTY_RECORD
+                } else {
+                    self.export_node(buffer, left.id)?
+                };
+
+                let new_right = if right.id == EMPTY_RECORD {
+                    EMPTY_RECORD
+                } else {
+                    self.export_node(buffer, right.id)?
+                };
+
+                let mut node = Node::from_internal(
+                    prefix,
+                    Box::new(Node::from_id(new_left)),
+                    Box::new(Node::from_id(new_right)),
+                );
+                Ok(buffer.write_node(&mut node)?)
+            }
+        }
+    }
+
     pub fn get(&mut self, key: &Hash) -> Result<Option<Vec<u8>>> {
         if self.is_empty() {
             return Ok(None)

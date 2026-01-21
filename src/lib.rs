@@ -53,6 +53,7 @@ pub enum VerifyError {
     KeyExists,
     IncompleteProof,
     KeyNotFound,
+    RootMismatch,
 }
 
 #[derive(Debug)]
@@ -78,6 +79,7 @@ impl core::fmt::Display for VerifyError {
             VerifyError::KeyExists => write!(f, "Key already exists"),
             VerifyError::IncompleteProof => write!(f, "Incomplete proof"),
             VerifyError::KeyNotFound => write!(f, "Key not found"),
+            VerifyError::RootMismatch => write!(f, "Root mismatch"),
         }
     }
 }
