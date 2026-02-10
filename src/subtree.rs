@@ -42,6 +42,14 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
+    pub fn to_vec(&self) -> Result<Vec<u8>> {
+        borsh::to_vec(self).map_err(|_| crate::Error::Encode(crate::EncodeError::InvalidData("serialization failed")))
+    }
+
+    pub fn from_slice(buf: &[u8]) -> Result<Self> {
+        borsh::from_slice(buf).map_err(|_| crate::Error::Encode(crate::EncodeError::InvalidData("deserialization failed")))
+    }
+
     pub fn compute_root(&self) -> Result<Hash> {
         if self.is_empty() {
             return Ok(H::hash(&[]));
@@ -1185,116 +1193,17 @@ fn extend_prefix(prefix: &[bool], bucket: usize, bits: usize) -> Vec<bool> {
 
 impl<H: NodeHasher> BorshSerialize for SubTree<H> {
     fn serialize<W: Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        self.root.serialize(writer)
+        crate::encode::serialize_node(&self.root, writer)
     }
 }
 
 impl<H: NodeHasher> BorshDeserialize for SubTree<H> {
     fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let root = SubTreeNode::deserialize_reader(reader)?;
+        let root = crate::encode::deserialize_node(reader)?;
         Ok(Self {
             root,
             _marker: core::marker::PhantomData,
         })
-    }
-}
-
-impl BorshSerialize for SubTreeNode {
-    fn serialize<W: Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        match self {
-            SubTreeNode::Leaf { key, value_or_hash } => {
-                0u8.serialize(writer)?;
-                key.0.serialize(writer)?;
-                value_or_hash.serialize(writer)?;
-            }
-            SubTreeNode::Internal {
-                prefix,
-                left,
-                right,
-            } => {
-                1u8.serialize(writer)?;
-                prefix.0.serialize(writer)?;
-                left.serialize(writer)?;
-                right.serialize(writer)?;
-            }
-            SubTreeNode::Hash(hash) => {
-                2u8.serialize(writer)?;
-                hash.serialize(writer)?;
-            }
-            SubTreeNode::None => {
-                unreachable!("cannot encode a none node")
-            }
-        }
-        Ok(())
-    }
-}
-
-impl BorshDeserialize for SubTreeNode {
-    fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let tag = u8::deserialize_reader(reader)?;
-        match tag {
-            0 => {
-                let key_raw: Hash = BorshDeserialize::deserialize_reader(reader)?;
-                let key = Path(key_raw);
-                let value_or_hash = ValueOrHash::deserialize_reader(reader)?;
-                Ok(SubTreeNode::Leaf { key, value_or_hash })
-            }
-            1 => {
-                let seg: [u8; 33] = BorshDeserialize::deserialize_reader(reader)?;
-                let prefix = PathSegment(seg);
-                let left: Box<SubTreeNode> = Box::new(SubTreeNode::deserialize_reader(reader)?);
-                let right: Box<SubTreeNode> = Box::new(SubTreeNode::deserialize_reader(reader)?);
-                Ok(SubTreeNode::Internal {
-                    prefix,
-                    left,
-                    right,
-                })
-            }
-            2 => {
-                let hash: Hash = BorshDeserialize::deserialize_reader(reader)?;
-                Ok(SubTreeNode::Hash(hash))
-            }
-            _ => Err(borsh::io::Error::new(
-                borsh::io::ErrorKind::InvalidData,
-                "Invalid tag for SubTreeNode",
-            )),
-        }
-    }
-}
-
-impl BorshSerialize for ValueOrHash {
-    fn serialize<W: Write>(&self, writer: &mut W) -> borsh::io::Result<()> {
-        match self {
-            ValueOrHash::Value(value) => {
-                0u8.serialize(writer)?;
-                value.serialize(writer)?;
-            }
-            ValueOrHash::Hash(hash) => {
-                1u8.serialize(writer)?;
-                hash.serialize(writer)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-impl BorshDeserialize for ValueOrHash {
-    fn deserialize_reader<R: Read>(reader: &mut R) -> borsh::io::Result<Self> {
-        let tag = u8::deserialize_reader(reader)?;
-        match tag {
-            0 => {
-                let value: Vec<u8> = BorshDeserialize::deserialize_reader(reader)?;
-                Ok(ValueOrHash::Value(value))
-            }
-            1 => {
-                let hash: Hash = BorshDeserialize::deserialize_reader(reader)?;
-                Ok(ValueOrHash::Hash(hash))
-            }
-            _ => Err(borsh::io::Error::new(
-                borsh::io::ErrorKind::InvalidData,
-                "Invalid tag for ValueOrHash",
-            )),
-        }
     }
 }
 

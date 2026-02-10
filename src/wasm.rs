@@ -6,7 +6,6 @@ mod wasm_api {
 
     use crate::{
         subtree::SubTree as NativeSubTree,
-        encode::SubTreeEncoder,
         Sha256Hasher,
     };
     use crate::subtree::ValueOrHash;
@@ -40,9 +39,10 @@ mod wasm_api {
 
         /// Serializes the SubTree to a Uint8Array.
         #[wasm_bindgen]
-        pub fn write(&self, buf: &mut [u8]) -> Result<usize, JsValue> {
-            Ok(self.inner.write_to_slice(buf)
-                .map_err(|err| JsValue::from_str(&format!("Serialization error: {:?}", err)))?)
+        pub fn to_bytes(&self) -> Result<Uint8Array, JsValue> {
+            let bytes = self.inner.to_vec()
+                .map_err(|err| JsValue::from_str(&format!("Serialization error: {:?}", err)))?;
+            Ok(Uint8Array::from(&bytes[..]))
         }
 
         /// Returns the root hash as a Uint8Array.
