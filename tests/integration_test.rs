@@ -1181,13 +1181,60 @@ fn subtree_sync_100k_keys_80_differ() {
 }
 
 #[test]
+fn compare_encoding_sizes() {
+    let db = Database::memory().unwrap();
+    let mut write = db.begin_write().unwrap();
+
+    // Insert keys with varied prefixes and value sizes
+    for i in 0u8..50 {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        k[1] = i.wrapping_mul(37);
+        write = write.insert(k, vec![i; (i as usize % 20) + 1]).unwrap();
+    }
+    write.commit().unwrap();
+
+    let all_keys: Vec<Hash> = (0u8..50).map(|i| {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        k[1] = i.wrapping_mul(37);
+        k
+    }).collect();
+
+    let mut snapshot = db.begin_read().unwrap();
+
+    // Full proof with all keys (has values)
+    let full_proof: SubTree<Sha256Hasher> = snapshot.prove(&all_keys, ProofType::Standard).unwrap();
+
+    // Partial proof (mix of values and hash nodes)
+    let partial_keys: Vec<Hash> = all_keys[..10].to_vec();
+    let partial_proof = full_proof.prove(&partial_keys, spacedb::subtree::ProofType::Standard).unwrap();
+
+    // Single leaf
+    let single_proof = full_proof.prove(&all_keys[..1], spacedb::subtree::ProofType::Standard).unwrap();
+
+    for (label, subtree) in [
+        ("full (50 keys)", &full_proof),
+        ("partial (10 keys)", &partial_proof),
+        ("single (1 key)", &single_proof),
+    ] {
+        let bytes = borsh::to_vec(subtree).unwrap();
+
+        eprintln!("{label}: {} bytes", bytes.len());
+
+        // Verify round-trip
+        let deserialized: SubTree<Sha256Hasher> = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(deserialized.compute_root().unwrap(), subtree.compute_root().unwrap());
+    }
+}
+
+#[test]
 fn export_produces_identical_file() {
     use std::fs;
-
-    let temp_dir = std::env::temp_dir();
-    let original_path = temp_dir.join("test_original.sdb");
-    let exported_path = temp_dir.join("test_exported.sdb");
-    let fresh_path = temp_dir.join("test_fresh.sdb");
+    let tmp_dir = std::env::temp_dir();
+    let original_path = tmp_dir.join("test_original.sdb");
+    let exported_path = tmp_dir.join("test_exported.sdb");
+    let fresh_path = tmp_dir.join("test_fresh.sdb");
 
     // Clean up any existing files
     let _ = fs::remove_file(&original_path);
