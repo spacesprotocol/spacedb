@@ -379,12 +379,10 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
         Ok(record)
     }
 
-    pub fn write_node(&mut self, node: &mut Node) -> Result<Record, io::Error> {
+    pub fn write_node(&mut self, node: &Node) -> Result<Record, io::Error> {
         if self.remaining() < node.mem_size() {
             self.flush()?;
         }
-
-        let config = config::standard();
 
         if node.inner.is_none() {
             if node.id != EMPTY_RECORD {
@@ -394,7 +392,8 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
         }
 
         let size = {
-            let inner = node.inner.as_mut().unwrap();
+            let inner = node.inner.as_ref().unwrap();
+            let config = config::standard();
             bincode::encode_into_slice(inner, &mut self.tail(), config).map_err(|e| {
                 io::Error::new(
                     io::ErrorKind::Other,
