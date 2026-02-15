@@ -1309,3 +1309,53 @@ fn export_produces_identical_file() {
     let _ = fs::remove_file(&exported_path);
     let _ = fs::remove_file(&fresh_path);
 }
+
+#[test]
+fn read_only_while_writer_holds_db() {
+    use std::fs;
+
+    let tmp_dir = std::env::temp_dir();
+    let db_path = tmp_dir.join("test_read_only_lock.sdb");
+    let _ = fs::remove_file(&db_path);
+    let path = db_path.to_str().unwrap();
+
+    // Open for writing and insert some data
+    let db = Database::open(path).unwrap();
+    let mut write = db.begin_write().unwrap();
+    for i in 0u8..10 {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        write = write.insert(k, vec![i; 4]).unwrap();
+    }
+    write.commit().unwrap();
+
+    // While writer is still open, open read-only and verify data
+    let reader = Database::open_read_only(path).unwrap();
+    let mut snapshot = reader.begin_read().unwrap();
+    let reader_root = snapshot.compute_root().unwrap();
+
+    let mut writer_snapshot = db.begin_read().unwrap();
+    let writer_root = writer_snapshot.compute_root().unwrap();
+
+    assert_eq!(reader_root, writer_root, "reader should see the same root as writer");
+
+    for i in 0u8..10 {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        assert_eq!(snapshot.get(&k).unwrap(), Some(vec![i; 4]));
+    }
+
+    // A second writer should fail
+    let second_writer = Database::open(path);
+    assert!(second_writer.is_err(), "second writer should be denied");
+
+    // A second reader should succeed
+    let reader2 = Database::open_read_only(path).unwrap();
+    let mut snapshot2 = reader2.begin_read().unwrap();
+    assert_eq!(snapshot2.compute_root().unwrap(), writer_root);
+
+    drop(reader);
+    drop(reader2);
+    drop(db);
+    let _ = fs::remove_file(&db_path);
+}
