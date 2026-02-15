@@ -30,37 +30,7 @@ use std::os::{
 };
 
 #[cfg(windows)]
-use std::os::windows::{
-    fs::FileExt,
-    io::{AsRawHandle, RawHandle},
-};
-
-#[cfg(windows)]
-const ERROR_LOCK_VIOLATION: i32 = 0x21;
-
-#[cfg(windows)]
-const ERROR_IO_PENDING: i32 = 997;
-
-#[cfg(windows)]
-extern "system" {
-    /// <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfile>
-    fn LockFile(
-        file: RawHandle,
-        offset_low: u32,
-        offset_high: u32,
-        length_low: u32,
-        length_high: u32,
-    ) -> i32;
-
-    /// <https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-unlockfile>
-    fn UnlockFile(
-        file: RawHandle,
-        offset_low: u32,
-        offset_high: u32,
-        length_low: u32,
-        length_high: u32,
-    ) -> i32;
-}
+use std::os::windows::fs::FileExt;
 
 #[cfg(not(any(windows, unix)))]
 use std::sync::Mutex;
@@ -68,6 +38,7 @@ use std::sync::Mutex;
 #[cfg(any(windows, unix))]
 pub struct FileBackend {
     file: File,
+    locked: bool,
 }
 
 #[cfg(any(unix))]
@@ -80,21 +51,27 @@ impl FileBackend {
             if err.kind() == io::ErrorKind::WouldBlock {
                 Err(io::Error::new(
                     io::ErrorKind::WouldBlock,
-                    "Database already open",
+                    "Database already open for writing",
                 ))
             } else {
                 Err(err.into())
             }
         } else {
-            Ok(Self { file })
+            Ok(Self { file, locked: true })
         }
+    }
+
+    pub fn read_only(file: File) -> Self {
+        Self { file, locked: false }
     }
 }
 
 #[cfg(any(unix))]
 impl Drop for FileBackend {
     fn drop(&mut self) {
-        unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        if self.locked {
+            unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
     }
 }
 
@@ -126,33 +103,11 @@ impl StorageBackend for FileBackend {
 #[cfg(windows)]
 impl FileBackend {
     pub fn new(file: File) -> Result<Self, io::Error> {
-        let handle = file.as_raw_handle();
-        unsafe {
-            let result = LockFile(handle, 0, 0, u32::MAX, u32::MAX);
-
-            if result == 0 {
-                let err = io::Error::last_os_error();
-                return if err.raw_os_error() == Some(ERROR_IO_PENDING)
-                    || err.raw_os_error() == Some(ERROR_LOCK_VIOLATION)
-                {
-                    Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "Database already open",
-                    ))
-                } else {
-                    Err(err.into())
-                };
-            }
-        };
-
-        Ok(Self { file })
+        Ok(Self { file, locked: false })
     }
-}
 
-#[cfg(windows)]
-impl Drop for FileBackend {
-    fn drop(&mut self) {
-        unsafe { UnlockFile(self.file.as_raw_handle(), 0, 0, u32::MAX, u32::MAX) };
+    pub fn read_only(file: File) -> Self {
+        Self { file, locked: false }
     }
 }
 

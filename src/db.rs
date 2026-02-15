@@ -101,14 +101,29 @@ impl DatabaseHeader {
 
 impl Database<Sha256Hasher> {
     pub fn open(path: &str) -> Result<Self> {
+        let mut opts = OpenOptions::new();
+        opts.read(true).write(true).create(true);
+
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_SHARE_READ: u32 = 0x00000001;
+            opts.share_mode(FILE_SHARE_READ);
+        }
+
+        let file = opts.open(path).map_err(crate::Error::IO)?;
+        let config = Configuration::standard();
+        let backend = FileBackend::new(file)?;
+        Self::new(Box::new(backend), config)
+    }
+
+    pub fn open_read_only(path: &str) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
-            .write(true)
-            .create(true)
             .open(path)
-            .unwrap();
+            .map_err(crate::Error::IO)?;
         let config = Configuration::standard();
-        Self::new(Box::new(FileBackend::new(file)?), config)
+        Self::new(Box::new(FileBackend::read_only(file)), config)
     }
 
     pub fn memory() -> Result<Self> {
