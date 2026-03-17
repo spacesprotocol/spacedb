@@ -207,6 +207,14 @@ impl<H: NodeHasher> Database<H> {
         Ok(save_point)
     }
 
+    pub fn reset(&self) -> Result<()> {
+        let mut header = self.header.lock().expect("acquire lock");
+        *header = DatabaseHeader::new();
+        self.write_header(&header)?;
+        self.file.set_len(header.len())?;
+        Ok(())
+    }
+
     pub fn begin_write(&self) -> Result<WriteTransaction<'_, H>> {
         Ok(WriteTransaction::new(self))
     }

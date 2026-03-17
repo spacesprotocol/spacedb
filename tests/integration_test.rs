@@ -1359,3 +1359,43 @@ fn read_only_while_writer_holds_db() {
     drop(db);
     let _ = fs::remove_file(&db_path);
 }
+
+#[test]
+fn reset_to_empty() {
+    let db = Database::memory().unwrap();
+    let empty_root = db.begin_read().unwrap().compute_root().unwrap();
+
+    // Insert data across multiple snapshots
+    let mut write = db.begin_write().unwrap();
+    for i in 0u8..10 {
+        let mut k = [0u8; 32];
+        k[0] = i;
+        write = write.insert(k, vec![i]).unwrap();
+    }
+    write.commit().unwrap();
+
+    db.begin_write().unwrap()
+        .insert([0xFFu8; 32], vec![0xFF]).unwrap()
+        .commit().unwrap();
+
+    assert_eq!(db.iter().count(), 2, "should have 2 snapshots");
+    assert_ne!(db.begin_read().unwrap().compute_root().unwrap(), empty_root);
+
+    // Reset to empty
+    db.reset().unwrap();
+
+    // Should behave like a fresh database
+    let mut snapshot = db.begin_read().unwrap();
+    assert_eq!(snapshot.compute_root().unwrap(), empty_root);
+    assert_eq!(snapshot.get(&[0u8; 32]).unwrap(), None);
+    assert_eq!(db.iter().count(), 0, "should have 0 snapshots after reset");
+
+    // Should be able to write again after reset
+    db.begin_write().unwrap()
+        .insert([0x42u8; 32], vec![1, 2, 3]).unwrap()
+        .commit().unwrap();
+
+    let mut snapshot = db.begin_read().unwrap();
+    assert_eq!(snapshot.get(&[0x42u8; 32]).unwrap(), Some(vec![1, 2, 3]));
+    assert_ne!(snapshot.compute_root().unwrap(), empty_root);
+}
