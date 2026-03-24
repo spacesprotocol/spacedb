@@ -32,12 +32,12 @@ pub struct WriteTransaction<'db, H: NodeHasher> {
 }
 
 #[cfg(feature = "hash-idx")]
-pub struct HashIndex {
-    conn: Arc<rusqlite::Connection>,
-}
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "hash-idx")]
-use std::sync::Arc;
+pub struct HashIndex {
+    conn: Arc<Mutex<rusqlite::Connection>>,
+}
 
 #[cfg(feature = "hash-idx")]
 impl Clone for HashIndex {
@@ -287,7 +287,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
             return Ok(false);
         }
 
-        self.hash_index = Some(HashIndex { conn: Arc::new(conn) });
+        self.hash_index = Some(HashIndex { conn: Arc::new(Mutex::new(conn)) });
         Ok(true)
     }
 
@@ -559,7 +559,8 @@ impl<H: NodeHasher> ReadTransaction<H> {
         #[cfg(feature = "hash-idx")]
         if node.id != EMPTY_RECORD {
             if let Some(ref idx) = hash_index {
-                let result: core::result::Result<Vec<u8>, _> = idx.conn.query_row(
+                let conn = idx.conn.lock().expect("hash index lock");
+                let result: core::result::Result<Vec<u8>, _> = conn.query_row(
                     "SELECT value FROM hashes WHERE offset = ?1",
                     [node.id.offset as i64],
                     |row| row.get(0),
