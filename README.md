@@ -157,3 +157,7 @@ Merkle-ized tries, including variations like Patricia tries and Merkle prefix tr
 ## License
 
 This project is licensed under the [Apache 2.0](LICENSE).
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/spacedb)
