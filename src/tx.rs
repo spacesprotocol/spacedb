@@ -31,11 +31,31 @@ pub struct WriteTransaction<'db, H: NodeHasher> {
     metadata: Option<Vec<u8>>,
 }
 
+#[cfg(feature = "hash-idx")]
+pub struct HashIndex {
+    conn: Arc<rusqlite::Connection>,
+}
+
+#[cfg(feature = "hash-idx")]
+use std::sync::Arc;
+
+#[cfg(feature = "hash-idx")]
+impl Clone for HashIndex {
+    fn clone(&self) -> Self {
+        Self { conn: self.conn.clone() }
+    }
+}
+
+#[cfg(not(feature = "hash-idx"))]
+#[derive(Clone)]
+pub struct HashIndex;
+
 #[derive(Clone)]
 pub struct ReadTransaction<H: NodeHasher> {
     db: Database<H>,
     savepoint: SavePoint,
     cache: Cache,
+    hash_index: Option<HashIndex>,
 }
 
 #[derive(Clone)]
@@ -60,11 +80,18 @@ impl<H: NodeHasher> ReadTransaction<H> {
         let cache_size = db.config.cache_size;
         let root = savepoint.root;
 
-        Self {
+        #[allow(unused_mut)]
+        let mut tx = Self {
             db,
             savepoint,
             cache: Cache::new(root, cache_size),
-        }
+            hash_index: None,
+        };
+
+        #[cfg(feature = "hash-idx")]
+        { let _ = tx.load_hash_index(); }
+
+        tx
     }
 
     pub fn iter(&self) -> KeyIterator<H> {
@@ -76,6 +103,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         header.savepoint = self.savepoint.clone();
         self.db.write_header(&header)?;
         self.db.file.set_len(header.len())?;
+        Database::<H>::cleanup_hash_indexes(&self.db.path, header.len());
         Ok(())
     }
 
@@ -84,6 +112,183 @@ impl<H: NodeHasher> ReadTransaction<H> {
             None => &[],
             Some(meta) => meta.as_slice()
         }
+    }
+
+    /// Returns the sidecar hash index path for the current snapshot.
+    #[cfg(feature = "hash-idx")]
+    fn hash_index_path(&self) -> Option<String> {
+        let db_path = self.db.path.as_ref()?;
+        let path = std::path::Path::new(db_path);
+        let stem = path.file_stem()?.to_str()?;
+        let parent = path.parent().unwrap_or(std::path::Path::new("."));
+        let idx_path = parent.join(format!("{}.{}.hidx.sqlite", stem, self.savepoint.root.offset));
+        idx_path.to_str().map(|s| s.to_string())
+    }
+
+    /// Builds a hash index sidecar file for the current snapshot.
+    /// This precomputes all node hashes and stores them in a sqlite database,
+    /// so that future `prove()` and `compute_root()` calls can look up hashes
+    /// instead of recursively walking the tree.
+    #[cfg(feature = "hash-idx")]
+    pub fn build_hash_index(&mut self) -> Result<()> {
+        if self.is_empty() {
+            return Ok(());
+        }
+
+        let idx_path = self.hash_index_path()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "Cannot build hash index for in-memory database"))?;
+
+        // Compute fingerprint: hash of root node's raw bytes
+        let root_raw = self.db.file.read(self.savepoint.root.offset, self.savepoint.root.size as usize)?;
+        let fingerprint = H::hash(&root_raw);
+
+        // Skip if a valid index already exists
+        if std::path::Path::new(&idx_path).exists() {
+            if let Ok(existing) = rusqlite::Connection::open_with_flags(
+                &idx_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                let stored: core::result::Result<Vec<u8>, _> = existing.query_row(
+                    "SELECT fingerprint FROM meta LIMIT 1", [], |row| row.get(0),
+                );
+                if let Ok(stored) = stored {
+                    if stored.len() == 32 && stored == fingerprint {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Create the sqlite sidecar
+        let _ = std::fs::remove_file(&idx_path);
+        let conn = rusqlite::Connection::open(&idx_path)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        conn.execute_batch(
+            "PRAGMA journal_mode = OFF;
+             PRAGMA synchronous = OFF;
+             PRAGMA cache_size = -65536;
+             PRAGMA page_size = 4096;
+             CREATE TABLE hashes (offset INTEGER PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
+             CREATE TABLE meta (fingerprint BLOB NOT NULL);"
+        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        // Walk tree bottom-up, flushing in batches
+        let batch_size = 500_000;
+        let mut buffer: Vec<(u64, Hash)> = Vec::with_capacity(batch_size);
+
+        self.build_index_node(self.savepoint.root, &mut buffer, &conn, batch_size)?;
+
+        // Flush remaining
+        if !buffer.is_empty() {
+            Self::flush_index_batch(&buffer, &conn)?;
+        }
+
+        // Store fingerprint
+        conn.execute(
+            "INSERT INTO meta (fingerprint) VALUES (?1)",
+            [&fingerprint[..]],
+        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        // Auto-load the index we just built
+        let _ = self.load_hash_index();
+
+        Ok(())
+    }
+
+    #[cfg(feature = "hash-idx")]
+    fn flush_index_batch(
+        buffer: &[(u64, Hash)],
+        conn: &rusqlite::Connection,
+    ) -> Result<()> {
+        conn.execute_batch("BEGIN")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        {
+            let mut stmt = conn.prepare_cached("INSERT OR REPLACE INTO hashes (offset, value) VALUES (?1, ?2)")
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            for (offset, v) in buffer {
+                stmt.execute(rusqlite::params![offset, &v[..]])
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            }
+        }
+        conn.execute_batch("COMMIT")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        Ok(())
+    }
+
+    #[cfg(feature = "hash-idx")]
+    fn build_index_node(
+        &self,
+        node_id: Record,
+        buffer: &mut Vec<(u64, Hash)>,
+        conn: &rusqlite::Connection,
+        batch_size: usize,
+    ) -> Result<Hash> {
+        let inner = self.db.load_node(node_id)?;
+        match inner {
+            NodeInner::Leaf { key, value } => {
+                let value_hash = H::hash(&value);
+                let hash = H::hash_leaf(&key.0, &value_hash);
+                buffer.push((node_id.offset, hash));
+                if buffer.len() >= batch_size {
+                    Self::flush_index_batch(buffer, conn)?;
+                    buffer.clear();
+                }
+                Ok(hash)
+            }
+            NodeInner::Internal { prefix, left, right } => {
+                let left_hash = self.build_index_node(left.id, buffer, conn, batch_size)?;
+                let right_hash = self.build_index_node(right.id, buffer, conn, batch_size)?;
+                let hash = H::hash_internal(prefix.as_bytes(), &left_hash, &right_hash);
+                buffer.push((node_id.offset, hash));
+                if buffer.len() >= batch_size {
+                    Self::flush_index_batch(buffer, conn)?;
+                    buffer.clear();
+                }
+                Ok(hash)
+            }
+        }
+    }
+
+    /// Loads a previously built hash index sidecar for the current snapshot.
+    /// Returns `true` if a valid index was loaded, `false` if no index exists
+    /// or the fingerprint doesn't match (stale index).
+    #[cfg(feature = "hash-idx")]
+    pub fn load_hash_index(&mut self) -> Result<bool> {
+        if self.is_empty() {
+            return Ok(false);
+        }
+
+        let idx_path = match self.hash_index_path() {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+
+        if !std::path::Path::new(&idx_path).exists() {
+            return Ok(false);
+        }
+
+        let conn = rusqlite::Connection::open_with_flags(
+            &idx_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        // Validate fingerprint
+        let root_raw = self.db.file.read(self.savepoint.root.offset, self.savepoint.root.size as usize)?;
+        let expected_fingerprint = H::hash(&root_raw);
+
+        let stored: Vec<u8> = conn.query_row(
+            "SELECT fingerprint FROM meta LIMIT 1",
+            [],
+            |row| row.get(0),
+        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+
+        if stored.len() != 32 || stored != expected_fingerprint {
+            return Ok(false);
+        }
+
+        self.hash_index = Some(HashIndex { conn: Arc::new(conn) });
+        Ok(true)
     }
 
     /// Exports the current snapshot to a new database file.
@@ -198,7 +403,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
 
         let mut n = self.cache.node.take().unwrap();
         let h = {
-            let entry = Self::hash_node(&self.db, &mut self.cache, &mut n)?;
+            let entry = Self::hash_node(&self.db, &mut self.cache, &mut n, &self.hash_index)?;
             entry.node.hash_cache.clone().unwrap()
         };
         self.cache.node = Some(n);
@@ -214,7 +419,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
         key_paths.sort();
 
-        match Self::prove_nodes(&self.db, &mut self.cache, &mut node, key_paths.as_slice(), 0, proof_type) {
+        match Self::prove_nodes(&self.db, &mut self.cache, &mut node, key_paths.as_slice(), 0, proof_type, &self.hash_index) {
             Ok(info) => {
                 self.cache.node = Some(node);
                 Ok(SubTree::<H> {
@@ -233,6 +438,11 @@ impl<H: NodeHasher> ReadTransaction<H> {
         self.savepoint.root == EMPTY_RECORD
     }
 
+    /// Returns the root node's file offset for this snapshot.
+    pub fn root_offset(&self) -> u64 {
+        self.savepoint.root.offset
+    }
+
     fn prove_nodes(
         db: &Database<H>,
         cache: &mut Cache,
@@ -240,6 +450,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         keys: &[Path<&Hash>],
         depth: usize,
         proof_type: ProofType,
+        hash_index: &Option<HashIndex>,
     ) -> Result<SubTreeNodeInfo> {
         let entry = cache.load_node(db, node)?;
         match entry.node.inner.as_mut().unwrap() {
@@ -277,31 +488,31 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 let (left_keys, right_keys) = keys.split_at(split);
 
                 let mut left_subtree = if left_keys.is_empty() { None } else {
-                    Some(Self::prove_nodes(db, cache, left, left_keys, depth + 1, proof_type)?)
+                    Some(Self::prove_nodes(db, cache, left, left_keys, depth + 1, proof_type, hash_index)?)
                 };
                 let mut right_subtree = if right_keys.is_empty() { None } else {
-                    Some(Self::prove_nodes(db, cache, right, right_keys, depth + 1, proof_type)?)
+                    Some(Self::prove_nodes(db, cache, right, right_keys, depth + 1, proof_type, hash_index)?)
                 };
 
                 // Include extended hash of the sibling if its subtree isn't already part of the proof
                 if proof_type == ProofType::Extended && left_subtree.is_none() &&
                     right_subtree.is_some() && right_subtree.as_ref().unwrap().value_node {
                     left_subtree = Some(SubTreeNodeInfo {
-                        node: Self::hash_node_extended(db, cache, left)?,
+                        node: Self::hash_node_extended(db, cache, left, hash_index)?,
                         value_node: false,
                     })
                 }
                 if proof_type == ProofType::Extended && right_subtree.is_none() &&
                     left_subtree.is_some() && left_subtree.as_ref().unwrap().value_node {
                     right_subtree = Some(SubTreeNodeInfo {
-                        node: Self::hash_node_extended(db, cache, right)?,
+                        node: Self::hash_node_extended(db, cache, right, hash_index)?,
                         value_node: false,
                     })
                 }
 
                 // If extended hashes aren't needed, include basic ones
                 if left_subtree.is_none() {
-                    let left_entry = Self::hash_node(db, cache, left)?;
+                    let left_entry = Self::hash_node(db, cache, left, hash_index)?;
                     let left_hash = left_entry.node.hash_cache.clone().unwrap();
                     left_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(left_hash),
@@ -309,7 +520,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                     });
                 }
                 if right_subtree.is_none() {
-                    let right_entry = Self::hash_node(db, cache, right)?;
+                    let right_entry = Self::hash_node(db, cache, right, hash_index)?;
                     let right_hash = right_entry.node.hash_cache.clone().unwrap();
                     right_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(right_hash),
@@ -338,9 +549,30 @@ impl<H: NodeHasher> ReadTransaction<H> {
         db: &Database<H>,
         cache: &mut Cache,
         node: &'c mut Node,
+        hash_index: &Option<HashIndex>,
     ) -> Result<CacheEntry<'c>> {
         if node.hash_cache.is_some() {
             return Ok(CacheEntry::new(node, false));
+        }
+
+        // Check hash index sidecar before loading/recursing
+        #[cfg(feature = "hash-idx")]
+        if node.id != EMPTY_RECORD {
+            if let Some(ref idx) = hash_index {
+                let result: core::result::Result<Vec<u8>, _> = idx.conn.query_row(
+                    "SELECT value FROM hashes WHERE offset = ?1",
+                    [node.id.offset as i64],
+                    |row| row.get(0),
+                );
+                if let Ok(cached) = result {
+                    if cached.len() == 32 {
+                        let mut hash = [0u8; 32];
+                        hash.copy_from_slice(&cached);
+                        node.hash_cache = Some(hash);
+                        return Ok(CacheEntry::new(node, false));
+                    }
+                }
+            }
         }
 
         let entry = cache.load_node(db, node)?;
@@ -354,9 +586,9 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 left,
                 right,
             } => {
-                let left_entry = Self::hash_node(db, cache, left)?;
+                let left_entry = Self::hash_node(db, cache, left, hash_index)?;
                 let left_hash = left_entry.node.hash_cache.as_ref().unwrap();
-                let right_entry = Self::hash_node(db, cache, right)?;
+                let right_entry = Self::hash_node(db, cache, right, hash_index)?;
                 let right_hash = right_entry.node.hash_cache.as_ref().unwrap();
                 entry.node.hash_cache =
                     Some(H::hash_internal(prefix.as_bytes(), left_hash, right_hash));
@@ -376,6 +608,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         db: &Database<H>,
         cache: &mut Cache,
         node: &mut Node,
+        hash_index: &Option<HashIndex>,
     ) -> Result<SubTreeNode> {
         let entry = cache.load_node(db, node)?;
         match entry.node.inner.as_mut().unwrap() {
@@ -391,8 +624,8 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 left,
                 right,
             } => {
-                let left_hash = Self::hash_node(db, cache, left)?.node.hash_cache.as_ref().unwrap().clone();
-                let right_hash = Self::hash_node(db, cache, right)?.node.hash_cache.as_ref().unwrap().clone();
+                let left_hash = Self::hash_node(db, cache, left, hash_index)?.node.hash_cache.as_ref().unwrap().clone();
+                let right_hash = Self::hash_node(db, cache, right, hash_index)?.node.hash_cache.as_ref().unwrap().clone();
                 Ok(SubTreeNode::Internal {
                     prefix: prefix.clone(),
                     left: Box::new(SubTreeNode::Hash(left_hash)),
@@ -765,6 +998,13 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         };
 
         self.db.write_header(&self.header)?;
+
+        #[cfg(feature = "hash-idx")]
+        if self.db.config.auto_hash_index {
+            let mut snapshot = ReadTransaction::new(self.db.clone(), self.header.savepoint.clone());
+            let _ = snapshot.build_hash_index();
+        }
+
         Ok(())
     }
 }

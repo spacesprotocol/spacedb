@@ -37,6 +37,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 #[derive(Clone, Debug)]
 pub struct Configuration<Hasher: NodeHasher> {
     pub cache_size: usize,
+    pub auto_hash_index: bool,
     _marker: PhantomData<Hasher>,
 }
 
@@ -100,12 +101,18 @@ impl<Hasher: NodeHasher> Configuration<Hasher> {
     pub fn new() -> Self {
         Self {
             cache_size: DEFAULT_CACHE_SIZE,
+            auto_hash_index: false,
             _marker: PhantomData,
         }
     }
 
     pub fn with_cache_size(mut self, size: usize) -> Self {
         self.cache_size = size;
+        self
+    }
+
+    pub fn with_auto_hash_index(mut self, enabled: bool) -> Self {
+        self.auto_hash_index = enabled;
         self
     }
 }

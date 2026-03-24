@@ -1399,3 +1399,302 @@ fn reset_to_empty() {
     assert_eq!(snapshot.get(&[0x42u8; 32]).unwrap(), Some(vec![1, 2, 3]));
     assert_ne!(snapshot.compute_root().unwrap(), empty_root);
 }
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_prove_matches_without_index() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_prove");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+    let mut tx = db.begin_write().unwrap();
+    for i in 0u32..200 {
+        let key = Sha256Hasher::hash(&i.to_le_bytes());
+        tx = tx.insert(key, vec![i as u8; 32]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    // Compute root and proofs without index
+    let mut snapshot = db.begin_read().unwrap();
+    let root_without = snapshot.compute_root().unwrap();
+
+    let prove_keys: Vec<Hash> = (0u32..5)
+        .map(|i| Sha256Hasher::hash(&i.to_le_bytes()))
+        .collect();
+    let proof_without = snapshot.prove(&prove_keys, ProofType::Standard).unwrap();
+    let proof_root_without = proof_without.compute_root().unwrap();
+
+    // Build the hash index
+    let mut snapshot = db.begin_read().unwrap();
+    snapshot.build_hash_index().unwrap();
+
+    // Now load it and prove again
+    let mut snapshot = db.begin_read().unwrap();
+    assert!(snapshot.load_hash_index().unwrap(), "should load index");
+
+    let root_with = snapshot.compute_root().unwrap();
+    assert_eq!(root_with, root_without, "root must match with and without index");
+
+    let proof_with = snapshot.prove(&prove_keys, ProofType::Standard).unwrap();
+    let proof_root_with = proof_with.compute_root().unwrap();
+    assert_eq!(proof_root_with, proof_root_without, "proof root must match");
+    assert_eq!(proof_root_with, root_with, "proof root must equal tree root");
+
+    // Cleanup
+    let _ = std::fs::remove_file(&dir);
+    // Cleanup index files
+    Database::<Sha256Hasher>::cleanup_hash_indexes(&Some(db_path.to_string()), 0);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_extended_proof_matches() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_extended");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+    let mut tx = db.begin_write().unwrap();
+    for i in 0u32..50 {
+        let key = Sha256Hasher::hash(&i.to_le_bytes());
+        tx = tx.insert(key, vec![i as u8]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    let prove_keys: Vec<Hash> = (0u32..3)
+        .map(|i| Sha256Hasher::hash(&i.to_le_bytes()))
+        .collect();
+
+    // Proof without index
+    let mut snapshot = db.begin_read().unwrap();
+    let proof_without = snapshot.prove(&prove_keys, ProofType::Extended).unwrap();
+    let root_without = proof_without.compute_root().unwrap();
+
+    // Build and load index
+    let mut snapshot = db.begin_read().unwrap();
+    snapshot.build_hash_index().unwrap();
+
+    let mut snapshot = db.begin_read().unwrap();
+    snapshot.load_hash_index().unwrap();
+
+    let proof_with = snapshot.prove(&prove_keys, ProofType::Extended).unwrap();
+    let root_with = proof_with.compute_root().unwrap();
+    assert_eq!(root_with, root_without, "extended proof root must match");
+
+    let _ = std::fs::remove_file(&dir);
+    Database::<Sha256Hasher>::cleanup_hash_indexes(&Some(db_path.to_string()), 0);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_rollback_deletes_stale_index() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_rollback");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+
+    // Snapshot 1
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"a"), vec![1]).unwrap()
+        .commit().unwrap();
+    let snapshot1 = db.begin_read().unwrap();
+
+    // Snapshot 2
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"b"), vec![2]).unwrap()
+        .commit().unwrap();
+    let mut snapshot2 = db.begin_read().unwrap();
+
+    // Build index for snapshot 2
+    snapshot2.build_hash_index().unwrap();
+
+    // Verify index file exists
+    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let parent = std::path::Path::new(db_path).parent().unwrap();
+
+    let index_exists_before = std::fs::read_dir(parent).unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            let name = e.file_name().to_str().unwrap_or("").to_string();
+            name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
+        });
+    assert!(index_exists_before, "index file should exist before rollback");
+
+    // Rollback to snapshot 1
+    snapshot1.rollback().unwrap();
+
+    // Index for snapshot 2 should be deleted
+    let index_exists_after = std::fs::read_dir(parent).unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            let name = e.file_name().to_str().unwrap_or("").to_string();
+            name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
+        });
+    assert!(!index_exists_after, "index file should be deleted after rollback");
+
+    let _ = std::fs::remove_file(&dir);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_reset_deletes_all_indexes() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_reset");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+
+    // Create two snapshots with indexes
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"a"), vec![1]).unwrap()
+        .commit().unwrap();
+    db.begin_read().unwrap().build_hash_index().unwrap();
+
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"b"), vec![2]).unwrap()
+        .commit().unwrap();
+    db.begin_read().unwrap().build_hash_index().unwrap();
+
+    // Reset
+    db.reset().unwrap();
+
+    // All index files should be gone
+    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let parent = std::path::Path::new(db_path).parent().unwrap();
+    let any_index = std::fs::read_dir(parent).unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            let name = e.file_name().to_str().unwrap_or("").to_string();
+            name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
+        });
+    assert!(!any_index, "all index files should be deleted after reset");
+
+    let _ = std::fs::remove_file(&dir);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_fingerprint_mismatch_after_rollback_and_new_writes() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_fp");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+
+    // Snapshot 1
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"x"), vec![1]).unwrap()
+        .commit().unwrap();
+    let snap1 = db.begin_read().unwrap();
+
+    // Snapshot 2
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"y"), vec![2]).unwrap()
+        .commit().unwrap();
+
+    // Build index for snapshot 2
+    db.begin_read().unwrap().build_hash_index().unwrap();
+
+    // Rollback to snapshot 1 (this deletes the index via cleanup)
+    snap1.rollback().unwrap();
+
+    // New writes — new snapshot may reuse the old root offset
+    db.begin_write().unwrap()
+        .insert(Sha256Hasher::hash(b"z"), vec![3]).unwrap()
+        .commit().unwrap();
+
+    // The old index was already cleaned up by rollback, so load should return false
+    let mut snapshot = db.begin_read().unwrap();
+    assert!(!snapshot.load_hash_index().unwrap(), "should not load stale index");
+
+    let _ = std::fs::remove_file(&dir);
+    Database::<Sha256Hasher>::cleanup_hash_indexes(&Some(db_path.to_string()), 0);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_memory_db_returns_error() {
+    let db = Database::memory().unwrap();
+    db.begin_write().unwrap()
+        .insert([1u8; 32], vec![1]).unwrap()
+        .commit().unwrap();
+
+    let mut snapshot = db.begin_read().unwrap();
+    assert!(snapshot.build_hash_index().is_err(), "should error for in-memory db");
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_no_index_fallback() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_fallback");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+    let mut tx = db.begin_write().unwrap();
+    for i in 0u32..100 {
+        let key = Sha256Hasher::hash(&i.to_le_bytes());
+        tx = tx.insert(key, vec![i as u8]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    // Don't build index — load should return false
+    let mut snapshot = db.begin_read().unwrap();
+    assert!(!snapshot.load_hash_index().unwrap(), "no index to load");
+
+    // prove still works
+    let key = Sha256Hasher::hash(&0u32.to_le_bytes());
+    let proof = snapshot.prove(&[key], ProofType::Standard).unwrap();
+    let root = snapshot.compute_root().unwrap();
+    assert_eq!(proof.compute_root().unwrap(), root);
+
+    let _ = std::fs::remove_file(&dir);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
+fn hash_index_auto_build_on_commit() {
+    use spacedb::Configuration;
+
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_auto");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    // Open with auto_hash_index enabled
+    let config = Configuration::standard().with_auto_hash_index(true);
+    let db = Database::open_with_config(db_path, config).unwrap();
+
+    // Insert and commit
+    let mut tx = db.begin_write().unwrap();
+    for i in 0u32..50 {
+        let key = Sha256Hasher::hash(&i.to_le_bytes());
+        tx = tx.insert(key, vec![i as u8]).unwrap();
+    }
+    tx.commit().unwrap();
+
+    // begin_read should auto-load the index that was auto-built on commit
+    let mut snapshot = db.begin_read().unwrap();
+
+    // Verify the index file exists
+    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let parent = std::path::Path::new(db_path).parent().unwrap();
+    let has_index = std::fs::read_dir(parent).unwrap()
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            let name = e.file_name().to_str().unwrap_or("").to_string();
+            name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
+        });
+    assert!(has_index, "auto-built index file should exist after commit");
+
+    // Verify prove works and roots match
+    let keys: Vec<_> = (0u32..3).map(|i| Sha256Hasher::hash(&i.to_le_bytes())).collect();
+    let root = snapshot.compute_root().unwrap();
+    let proof = snapshot.prove(&keys, ProofType::Standard).unwrap();
+    assert_eq!(proof.compute_root().unwrap(), root);
+
+    // Cleanup
+    let _ = std::fs::remove_file(&dir);
+    Database::<Sha256Hasher>::cleanup_hash_indexes(&Some(db_path.to_string()), 0);
+}
