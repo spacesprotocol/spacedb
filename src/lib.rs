@@ -38,6 +38,7 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub struct Configuration<Hasher: NodeHasher> {
     pub cache_size: usize,
     pub auto_hash_index: bool,
+    pub hash_index_pruning: Option<usize>,
     _marker: PhantomData<Hasher>,
 }
 
@@ -102,6 +103,7 @@ impl<Hasher: NodeHasher> Configuration<Hasher> {
         Self {
             cache_size: DEFAULT_CACHE_SIZE,
             auto_hash_index: false,
+            hash_index_pruning: Some(120),
             _marker: PhantomData,
         }
     }
@@ -113,6 +115,11 @@ impl<Hasher: NodeHasher> Configuration<Hasher> {
 
     pub fn with_auto_hash_index(mut self, enabled: bool) -> Self {
         self.auto_hash_index = enabled;
+        self
+    }
+
+    pub fn with_hash_index_pruning(mut self, keep: Option<usize>) -> Self {
+        self.hash_index_pruning = keep;
         self
     }
 }

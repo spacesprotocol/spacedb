@@ -261,9 +261,9 @@ impl<H: NodeHasher> Database<H> {
         }
     }
 
-    /// Deletes all hash index sidecar files except those belonging to the given snapshots.
+    /// Keeps the `keep` most recent hash index files, deletes the rest.
     #[cfg(feature = "hash-idx")]
-    pub fn retain_hash_indexes(&self, keep: &[&ReadTransaction<H>]) {
+    pub fn prune_hash_indexes(&self, keep: usize) {
         let db_path = match &self.path {
             Some(p) => p,
             None => return,
@@ -277,10 +277,7 @@ impl<H: NodeHasher> Database<H> {
         let prefix = format!("{}.", stem);
         let suffix = ".hidx.sqlite";
 
-        let keep_offsets: std::collections::HashSet<u64> = keep.iter()
-            .map(|tx| tx.root_offset())
-            .collect();
-
+        let mut index_files: Vec<(u64, std::path::PathBuf)> = Vec::new();
         if let Ok(entries) = std::fs::read_dir(parent) {
             for entry in entries.flatten() {
                 let name = entry.file_name();
@@ -291,13 +288,19 @@ impl<H: NodeHasher> Database<H> {
                 if let Some(rest) = name_str.strip_prefix(&prefix) {
                     if let Some(offset_str) = rest.strip_suffix(suffix) {
                         if let Ok(offset) = offset_str.parse::<u64>() {
-                            if !keep_offsets.contains(&offset) {
-                                let _ = std::fs::remove_file(entry.path());
-                            }
+                            index_files.push((offset, entry.path()));
                         }
                     }
                 }
             }
+        }
+
+        // Sort by offset descending (most recent first)
+        index_files.sort_by(|a, b| b.0.cmp(&a.0));
+
+        // Delete everything after the first `keep`
+        for (_, path) in index_files.into_iter().skip(keep) {
+            let _ = std::fs::remove_file(path);
         }
     }
 
