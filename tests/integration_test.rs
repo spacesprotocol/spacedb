@@ -1576,6 +1576,49 @@ fn hash_index_reset_deletes_all_indexes() {
 
 #[cfg(feature = "hash-idx")]
 #[test]
+fn hash_index_prune_keeps_n_most_recent() {
+    let dir = std::env::temp_dir().join("spacedb_hidx_test_prune");
+    let _ = std::fs::remove_file(&dir);
+    let db_path = dir.to_str().unwrap();
+
+    let db = Database::open(db_path).unwrap();
+    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let parent = std::path::Path::new(db_path).parent().unwrap();
+
+    let count_indexes = || -> usize {
+        std::fs::read_dir(parent).unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_str().unwrap_or("").to_string();
+                name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
+            })
+            .count()
+    };
+
+    // Create 4 snapshots, each with a hash index
+    for i in 0u8..4 {
+        let mut key = [0u8; 32];
+        key[0] = i;
+        db.begin_write().unwrap()
+            .insert(key, vec![i]).unwrap()
+            .commit().unwrap();
+        db.begin_read().unwrap().build_hash_index().unwrap();
+    }
+    assert_eq!(count_indexes(), 4, "should have 4 index files");
+
+    // Prune to keep 2 most recent
+    db.prune_hash_indexes(2);
+    assert_eq!(count_indexes(), 2, "should have 2 index files after prune");
+
+    // Prune to keep 0
+    db.prune_hash_indexes(0);
+    assert_eq!(count_indexes(), 0, "should have 0 index files after prune(0)");
+
+    let _ = std::fs::remove_file(&dir);
+}
+
+#[cfg(feature = "hash-idx")]
+#[test]
 fn hash_index_fingerprint_mismatch_after_rollback_and_new_writes() {
     let dir = std::env::temp_dir().join("spacedb_hidx_test_fp");
     let _ = std::fs::remove_file(&dir);

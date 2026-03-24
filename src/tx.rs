@@ -193,6 +193,11 @@ impl<H: NodeHasher> ReadTransaction<H> {
         // Auto-load the index we just built
         let _ = self.load_hash_index();
 
+        // Auto-prune old indexes
+        if let Some(keep) = self.db.config.hash_index_pruning {
+            self.db.prune_hash_indexes(keep);
+        }
+
         Ok(())
     }
 
