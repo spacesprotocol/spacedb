@@ -29,6 +29,7 @@ pub struct Database<H: NodeHasher> {
     pub(crate) header: Arc<Mutex<DatabaseHeader>>,
     pub(crate) file: Arc<Box<dyn StorageBackend>>,
     pub config: Configuration<H>,
+    pub(crate) path: Option<String>,
 }
 
 #[derive(Clone, Encode, Decode, Debug, Eq, PartialEq, Hash)]
@@ -101,6 +102,10 @@ impl DatabaseHeader {
 
 impl Database<Sha256Hasher> {
     pub fn open(path: &str) -> Result<Self> {
+        Self::open_with_config(path, Configuration::standard())
+    }
+
+    pub fn open_with_config(path: &str, config: Configuration<Sha256Hasher>) -> Result<Self> {
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).create(true);
 
@@ -112,9 +117,10 @@ impl Database<Sha256Hasher> {
         }
 
         let file = opts.open(path).map_err(crate::Error::IO)?;
-        let config = Configuration::standard();
         let backend = FileBackend::new(file)?;
-        Self::new(Box::new(backend), config)
+        let mut db = Self::new(Box::new(backend), config)?;
+        db.path = Some(path.to_string());
+        Ok(db)
     }
 
     pub fn open_read_only(path: &str) -> Result<Self> {
@@ -123,7 +129,9 @@ impl Database<Sha256Hasher> {
             .open(path)
             .map_err(crate::Error::IO)?;
         let config = Configuration::standard();
-        Self::new(Box::new(FileBackend::read_only(file)), config)
+        let mut db = Self::new(Box::new(FileBackend::read_only(file)), config)?;
+        db.path = Some(path.to_string());
+        Ok(db)
     }
 
     pub fn memory() -> Result<Self> {
@@ -150,6 +158,7 @@ impl<H: NodeHasher> Database<H> {
             header: Arc::new(Mutex::new(header)),
             file: Arc::new(file),
             config,
+            path: None,
         };
 
         if !has_header {
@@ -212,7 +221,84 @@ impl<H: NodeHasher> Database<H> {
         *header = DatabaseHeader::new();
         self.write_header(&header)?;
         self.file.set_len(header.len())?;
+        Self::cleanup_hash_indexes(&self.path, 0);
         Ok(())
+    }
+
+    /// Deletes hash index sidecar files whose root offset >= min_offset.
+    /// Pass min_offset=0 to delete all index files.
+    pub fn cleanup_hash_indexes(db_path: &Option<String>, min_offset: u64) {
+        let db_path = match db_path {
+            Some(p) => p,
+            None => return,
+        };
+        let path = std::path::Path::new(db_path);
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => return,
+        };
+        let parent = path.parent().unwrap_or(std::path::Path::new("."));
+        let prefix = format!("{}.", stem);
+        let suffix = ".hidx.sqlite";
+
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = match name.to_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if let Some(rest) = name_str.strip_prefix(&prefix) {
+                    if let Some(offset_str) = rest.strip_suffix(suffix) {
+                        if let Ok(offset) = offset_str.parse::<u64>() {
+                            if offset >= min_offset {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Deletes all hash index sidecar files except those belonging to the given snapshots.
+    #[cfg(feature = "hash-idx")]
+    pub fn retain_hash_indexes(&self, keep: &[&ReadTransaction<H>]) {
+        let db_path = match &self.path {
+            Some(p) => p,
+            None => return,
+        };
+        let path = std::path::Path::new(db_path);
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_string(),
+            None => return,
+        };
+        let parent = path.parent().unwrap_or(std::path::Path::new("."));
+        let prefix = format!("{}.", stem);
+        let suffix = ".hidx.sqlite";
+
+        let keep_offsets: std::collections::HashSet<u64> = keep.iter()
+            .map(|tx| tx.root_offset())
+            .collect();
+
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = match name.to_str() {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if let Some(rest) = name_str.strip_prefix(&prefix) {
+                    if let Some(offset_str) = rest.strip_suffix(suffix) {
+                        if let Ok(offset) = offset_str.parse::<u64>() {
+                            if !keep_offsets.contains(&offset) {
+                                let _ = std::fs::remove_file(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn begin_write(&self) -> Result<WriteTransaction<'_, H>> {

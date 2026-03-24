@@ -17,6 +17,7 @@ libc = { version = "0.2.150", optional = true }
 bincode = { version = "2.0.1", default-features = false, features = ["alloc", "derive", "std"], optional = true }
 borsh = { version = "1.5", default-features = false, features = ["derive"] }
 hex = { version = "0.4.3", optional = true }
+rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 
 # optional wasm feature
 wasm-bindgen = { version ="0.2.100", optional = true }
@@ -33,3 +34,4 @@ default = ["std", "extras"]
 std = ["libc", "hex", "bincode"]
 wasm = ["wasm-bindgen", "js-sys"]
 extras = []
+hash-idx = ["std", "rusqlite"]
