@@ -58,3 +58,4 @@ git_tag_name = "v{{ version }}"
 [[package]]
 name = "example"
 release = false
+publish = false
