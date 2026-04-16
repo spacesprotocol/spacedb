@@ -3,8 +3,8 @@ workspace = { members = ["example"] }
 [package]
 name = "spacedb"
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
+edition = "2024"
+rust-version = "1.85"
 description = "A cryptographically verifiable data store and universal accumulator for the Spaces protocol."
 repository = "https://github.com/spacesprotocol/spacedb"
 homepage = "https://spacesprotocol.org"

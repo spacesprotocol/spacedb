@@ -1,9 +1,9 @@
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use spacedb::tx::{ProofType, ReadTransaction};
 use spacedb::{
+    Hash, NodeHasher, Sha256Hasher,
     db::Database,
     subtree::{SubTree, ValueOrHash},
-    Hash, NodeHasher, Sha256Hasher,
 };
 use std::collections::HashSet;
 

@@ -1,13 +1,14 @@
 use crate::{
-    db::{Record, EMPTY_RECORD},
-    path::{Path, PathSegment, PathSegmentInner},
     Hash,
+    db::{EMPTY_RECORD, Record},
+    path::{Path, PathSegment, PathSegmentInner},
 };
 use bincode::{
+    Decode, Encode,
     de::Decoder,
     enc::Encoder,
     error::{DecodeError, EncodeError},
-    impl_borrow_decode, Decode, Encode,
+    impl_borrow_decode,
 };
 
 #[derive(Clone, Debug)]

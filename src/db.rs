@@ -1,10 +1,10 @@
 use crate::{
+    Configuration, Hash, NodeHasher, Result, Sha256Hasher,
     fs::{FileBackend, StorageBackend},
     node::NodeInner,
     tx::{ReadTransaction, WriteTransaction},
-    Configuration, Hash, NodeHasher, Result, Sha256Hasher,
 };
-use bincode::{config, error::DecodeError, Decode, Encode};
+use bincode::{Decode, Encode, config, error::DecodeError};
 use sha2::{Digest as _, Sha256};
 use std::{
     fs::OpenOptions,

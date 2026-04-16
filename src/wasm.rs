@@ -2,10 +2,10 @@
 mod wasm_api {
     use alloc::format;
     use js_sys::{Array, Uint8Array};
-    use wasm_bindgen::prelude::{wasm_bindgen, JsValue};
+    use wasm_bindgen::prelude::{JsValue, wasm_bindgen};
 
     use crate::subtree::ValueOrHash;
-    use crate::{subtree::SubTree as NativeSubTree, Sha256Hasher};
+    use crate::{Sha256Hasher, subtree::SubTree as NativeSubTree};
 
     #[wasm_bindgen]
     pub struct SubTree {

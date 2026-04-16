@@ -1,12 +1,12 @@
 use crate::{
-    path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils},
     Hash, NodeHasher, Result, VerifyError,
+    path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils},
 };
 
 use alloc::{boxed::Box, vec, vec::Vec};
 use borsh::{
-    io::{Read, Write},
     BorshDeserialize, BorshSerialize,
+    io::{Read, Write},
 };
 use core::marker::PhantomData;
 

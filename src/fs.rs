@@ -1,7 +1,7 @@
 // Uses flock on Unix and LockFile on Windows to ensure exclusive access to the database file.
 // based on https://github.com/cberner/redb/tree/master/src/tree_store/page_store/file_backend
 use crate::{
-    db::{Record, SavePoint, CHUNK_SIZE, EMPTY_RECORD},
+    db::{CHUNK_SIZE, EMPTY_RECORD, Record, SavePoint},
     node::Node,
 };
 use bincode::config;

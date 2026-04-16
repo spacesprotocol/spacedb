@@ -1,7 +1,7 @@
 use crate::{
+    Error, Result,
     path::{Direction, Path},
     subtree::ValueOrHash,
-    Error, Result,
 };
 
 use bincode::config;
@@ -9,11 +9,11 @@ use core::marker::PhantomData;
 use std::{io, sync::MutexGuard};
 
 use crate::{
-    db::{Database, Record, SavePoint, CHUNK_SIZE, EMPTY_RECORD},
+    Hash, NodeHasher,
+    db::{CHUNK_SIZE, Database, EMPTY_RECORD, Record, SavePoint},
     node::{Node, NodeInner},
     path::{BitLength, PathUtils},
     subtree::{SubTree, SubTreeNode},
-    Hash, NodeHasher,
 };
 
 use crate::{db::DatabaseHeader, fs::WriteBuffer};
@@ -624,7 +624,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         // Check hash index sidecar before loading/recursing
         #[cfg(feature = "hash-idx")]
         if node.id != EMPTY_RECORD {
-            if let Some(ref idx) = hash_index {
+            if let Some(idx) = hash_index {
                 let conn = idx.conn.lock().expect("hash index lock");
                 let result: core::result::Result<Vec<u8>, _> = conn.query_row(
                     "SELECT value FROM hashes WHERE offset = ?1",
