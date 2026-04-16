@@ -2,7 +2,7 @@ workspace = { members = ["example"] }
 
 [package]
 name = "spacedb"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 rust-version = "1.85"
 description = "A cryptographically verifiable data store and universal accumulator for the Spaces protocol."
