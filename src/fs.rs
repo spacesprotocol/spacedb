@@ -1,7 +1,7 @@
 // Uses flock on Unix and LockFile on Windows to ensure exclusive access to the database file.
 // based on https://github.com/cberner/redb/tree/master/src/tree_store/page_store/file_backend
 use crate::{
-    db::{Record, SavePoint, EMPTY_RECORD, CHUNK_SIZE},
+    db::{CHUNK_SIZE, EMPTY_RECORD, Record, SavePoint},
     node::Node,
 };
 use bincode::config;
@@ -14,6 +14,9 @@ use std::{
 
 pub trait StorageBackend: Sync + Send {
     fn len(&self) -> Result<u64, io::Error>;
+    fn is_empty(&self) -> Result<bool, io::Error> {
+        Ok(self.len()? == 0)
+    }
     fn set_len(&self, len: u64) -> Result<(), io::Error>;
     fn read(&self, offset: u64, len: usize) -> Result<Vec<u8>, io::Error>;
     fn sync_data(&self) -> Result<(), io::Error>;
@@ -23,11 +26,8 @@ pub trait StorageBackend: Sync + Send {
 #[derive(Debug, Default)]
 pub struct MemoryBackend(RwLock<Vec<u8>>);
 
-#[cfg(any(unix))]
-use std::os::{
-    fd::AsRawFd,
-    unix::fs::FileExt,
-};
+#[cfg(unix)]
+use std::os::{fd::AsRawFd, unix::fs::FileExt};
 
 #[cfg(windows)]
 use std::os::windows::fs::FileExt;
@@ -41,7 +41,7 @@ pub struct FileBackend {
     locked: bool,
 }
 
-#[cfg(any(unix))]
+#[cfg(unix)]
 impl FileBackend {
     pub fn new(file: File) -> Result<Self, io::Error> {
         let fd = file.as_raw_fd();
@@ -54,7 +54,7 @@ impl FileBackend {
                     "Database already open for writing",
                 ))
             } else {
-                Err(err.into())
+                Err(err)
             }
         } else {
             Ok(Self { file, locked: true })
@@ -62,11 +62,14 @@ impl FileBackend {
     }
 
     pub fn read_only(file: File) -> Self {
-        Self { file, locked: false }
+        Self {
+            file,
+            locked: false,
+        }
     }
 }
 
-#[cfg(any(unix))]
+#[cfg(unix)]
 impl Drop for FileBackend {
     fn drop(&mut self) {
         if self.locked {
@@ -75,7 +78,7 @@ impl Drop for FileBackend {
     }
 }
 
-#[cfg(any(unix))]
+#[cfg(unix)]
 impl StorageBackend for FileBackend {
     fn len(&self) -> Result<u64, io::Error> {
         Ok(self.file.metadata()?.len())
@@ -103,11 +106,17 @@ impl StorageBackend for FileBackend {
 #[cfg(windows)]
 impl FileBackend {
     pub fn new(file: File) -> Result<Self, io::Error> {
-        Ok(Self { file, locked: false })
+        Ok(Self {
+            file,
+            locked: false,
+        })
     }
 
     pub fn read_only(file: File) -> Self {
-        Self { file, locked: false }
+        Self {
+            file,
+            locked: false,
+        }
     }
 }
 
@@ -261,6 +270,9 @@ impl StorageBackend for MemoryBackend {
     }
 }
 
+// Callers hold `Arc<Box<dyn StorageBackend>>`; borrowing through the `Box`
+// avoids forcing an extra manual deref at each call site.
+#[allow(clippy::borrowed_box)]
 pub struct WriteBuffer<'file, const SIZE: usize> {
     file: &'file Box<dyn StorageBackend>,
     buffer: Box<[u8; SIZE]>,
@@ -269,6 +281,7 @@ pub struct WriteBuffer<'file, const SIZE: usize> {
 }
 
 impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
+    #[allow(clippy::borrowed_box)]
     pub(crate) fn new(file: &'file Box<dyn StorageBackend>, file_len: u64) -> Self {
         Self {
             file,
@@ -308,7 +321,8 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
             self.buffer[remaining_len..CHUNK_SIZE as usize].fill(0);
 
             self.file.set_len(self.file_len + CHUNK_SIZE)?;
-            self.file.write(self.file_len, &self.buffer[0..CHUNK_SIZE as usize])?;
+            self.file
+                .write(self.file_len, &self.buffer[0..CHUNK_SIZE as usize])?;
             self.file_len += CHUNK_SIZE;
         }
 
@@ -318,13 +332,8 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
 
     pub fn write_save_point(&mut self, save_point: &SavePoint) -> Result<Record, io::Error> {
         let config = config::standard();
-        let size =
-            bincode::encode_into_slice(save_point, &mut self.tail(), config).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to encode save point: {}", e),
-                )
-            })?;
+        let size = bincode::encode_into_slice(save_point, self.tail(), config)
+            .map_err(|e| io::Error::other(format!("Failed to encode save point: {}", e)))?;
         let record = Record {
             offset: self.file_len + self.len as u64,
             size: size as u32,
@@ -350,12 +359,8 @@ impl<'file, const SIZE: usize> WriteBuffer<'file, SIZE> {
 
         let size = {
             let inner = node.inner.as_mut().unwrap();
-            bincode::encode_into_slice(inner, &mut self.tail(), config).map_err(|e| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("Failed to encode node: {}", e),
-                )
-            })?
+            bincode::encode_into_slice(inner, self.tail(), config)
+                .map_err(|e| io::Error::other(format!("Failed to encode node: {}", e)))?
         };
 
         let node_id = Record {

@@ -1,0 +1,56 @@
+[workspace]
+# Changelog lives at repo root alongside Cargo.toml.
+changelog_path = "CHANGELOG.md"
+# Always regenerate the changelog from conventional commits.
+changelog_update = true
+# Open a single release PR per push to main.
+pr_draft = false
+# Commit messages released by release-plz itself (should not trigger commitlint recursion).
+pr_name = "chore(release): {{ version }}"
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+
+body = """
+## [{{ version | trim_start_matches(pat=\"v\") }}]\
+  {%- if release_link -%}\
+    ({{ release_link }})\
+  {% endif %} - {{ timestamp | date(format=\"%Y-%m-%d\") }}
+{% for group, commits in commits | group_by(attribute=\"group\") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+    {% if commit.breaking %}[**breaking**] {% endif %}\
+    {{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+
+commit_parsers = [
+  { message = "^feat", group = "Features" },
+  { message = "^fix", group = "Bug Fixes" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Refactor" },
+  { message = "^docs", group = "Documentation" },
+  { message = "^test", group = "Tests" },
+  { message = "^build", group = "Build" },
+  { message = "^ci", group = "CI" },
+  { message = "^chore\\(release\\)", skip = true },
+  { message = "^chore", group = "Chore" },
+  { message = "^revert", group = "Revert" },
+]
+
+[[package]]
+name = "spacedb"
+# Publish to crates.io on release commits.
+publish = true
+# Create a GitHub release alongside the tag.
+git_release_enable = true
+# Use the commit subject as the GitHub release title.
+git_tag_name = "v{{ version }}"

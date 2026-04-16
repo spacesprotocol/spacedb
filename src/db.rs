@@ -1,11 +1,10 @@
 use crate::{
-    Result,
+    Configuration, Hash, NodeHasher, Result, Sha256Hasher,
     fs::{FileBackend, StorageBackend},
     node::NodeInner,
     tx::{ReadTransaction, WriteTransaction},
-    Configuration, Hash, NodeHasher, Sha256Hasher,
 };
-use bincode::{config, error::DecodeError, Decode, Encode};
+use bincode::{Decode, Encode, config, error::DecodeError};
 use sha2::{Digest as _, Sha256};
 use std::{
     fs::OpenOptions,
@@ -47,6 +46,12 @@ pub struct Record {
 
 pub const EMPTY_RECORD: Record = Record { offset: 0, size: 0 };
 
+impl Default for DatabaseHeader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DatabaseHeader {
     pub fn new() -> Self {
         Self {
@@ -86,7 +91,7 @@ impl DatabaseHeader {
         let expected = hasher.finalize();
 
         let actual = &bytes[len..len + 4];
-        if &actual[..4] != &expected[..4] {
+        if actual[..4] != expected[..4] {
             return Err(DecodeError::Other("Checksum mismatch"));
         }
 
@@ -94,8 +99,7 @@ impl DatabaseHeader {
     }
 
     pub(crate) fn len(&self) -> u64 {
-
-        let chunks_required = (self.savepoint.len() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        let chunks_required = self.savepoint.len().div_ceil(CHUNK_SIZE);
         std::cmp::max(chunks_required * CHUNK_SIZE, HEADER_SIZE)
     }
 }
@@ -173,9 +177,8 @@ impl<H: NodeHasher> Database<H> {
         H::hash(data)
     }
 
-    pub(crate) fn recover_header(
-        file: &Box<dyn StorageBackend>,
-    ) -> Result<(DatabaseHeader, bool)> {
+    #[allow(clippy::borrowed_box)]
+    pub(crate) fn recover_header(file: &Box<dyn StorageBackend>) -> Result<(DatabaseHeader, bool)> {
         // Attempt to read from slot 0
         let mut offset = 0;
         let bytes = file.read(offset, CHUNK_SIZE as usize)?;
@@ -186,8 +189,7 @@ impl<H: NodeHasher> Database<H> {
         // Didn't work, try backup
         offset = CHUNK_SIZE;
         let bytes = file.read(offset, CHUNK_SIZE as usize)?;
-        let header = DatabaseHeader::from_bytes(&bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let header = DatabaseHeader::from_bytes(&bytes).map_err(io::Error::other)?;
 
         Ok((header, true))
     }
@@ -211,8 +213,8 @@ impl<H: NodeHasher> Database<H> {
 
     fn read_save_point(&self, record: Record) -> Result<SavePoint> {
         let raw = self.file.read(record.offset, record.size as usize)?;
-        let (save_point, _) = bincode::decode_from_slice(&raw, config::standard())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let (save_point, _) =
+            bincode::decode_from_slice(&raw, config::standard()).map_err(io::Error::other)?;
         Ok(save_point)
     }
 
@@ -296,7 +298,7 @@ impl<H: NodeHasher> Database<H> {
         }
 
         // Sort by offset descending (most recent first)
-        index_files.sort_by(|a, b| b.0.cmp(&a.0));
+        index_files.sort_by_key(|entry| core::cmp::Reverse(entry.0));
 
         // Delete everything after the first `keep`
         for (_, path) in index_files.into_iter().skip(keep) {
@@ -372,7 +374,9 @@ impl<'db, H: NodeHasher> Iterator for SnapshotIterator<'db, H> {
     type Item = Result<ReadTransaction<H>>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.prev() {
-            Ok(Some(prev_savepoint)) => Some(Ok(ReadTransaction::new(self.db.clone(), prev_savepoint))),
+            Ok(Some(prev_savepoint)) => {
+                Some(Ok(ReadTransaction::new(self.db.clone(), prev_savepoint)))
+            }
             Ok(None) => None,
             Err(e) => Some(Err(e)),
         }
@@ -394,9 +398,7 @@ impl SavePoint {
     pub fn len(&self) -> u64 {
         let meta_size = match &self.metadata {
             None => 0,
-            Some(m) =>  {
-                bincode::encode_to_vec(m, config::standard()).unwrap().len()
-            }
+            Some(m) => bincode::encode_to_vec(m, config::standard()).unwrap().len(),
         } as u64;
         let root_size = self.root.offset + self.root.size as u64;
         let save_point_size = self.previous_savepoint.offset + self.previous_savepoint.size as u64;

@@ -1,8 +1,8 @@
+use crate::path::{BitLength, Path, PathSegment};
+use crate::subtree::{SubTreeNode, ValueOrHash};
 use alloc::boxed::Box;
 use alloc::vec;
 use borsh::io::{Error as IoError, ErrorKind, Read, Write};
-use crate::path::{BitLength, Path, PathSegment};
-use crate::subtree::{SubTreeNode, ValueOrHash};
 
 const NODE_LEAF: u8 = 0;
 const NODE_INTERNAL: u8 = 1;
@@ -12,7 +12,10 @@ const LEAF_VALUE: u8 = 0;
 const LEAF_HASH: u8 = 1;
 
 /// Serializes a `SubTreeNode` into a writer.
-pub(crate) fn serialize_node<W: Write>(node: &SubTreeNode, writer: &mut W) -> borsh::io::Result<()> {
+pub(crate) fn serialize_node<W: Write>(
+    node: &SubTreeNode,
+    writer: &mut W,
+) -> borsh::io::Result<()> {
     match node {
         SubTreeNode::Leaf { key, value_or_hash } => {
             writer.write_all(&[NODE_LEAF])?;
@@ -29,7 +32,11 @@ pub(crate) fn serialize_node<W: Write>(node: &SubTreeNode, writer: &mut W) -> bo
                 }
             }
         }
-        SubTreeNode::Internal { prefix, left, right } => {
+        SubTreeNode::Internal {
+            prefix,
+            left,
+            right,
+        } => {
             writer.write_all(&[NODE_INTERNAL])?;
             writer.write_all(prefix.as_bytes())?;
             serialize_node(left, writer)?;
@@ -80,14 +87,18 @@ pub(crate) fn deserialize_node<R: Read>(reader: &mut R) -> borsh::io::Result<Sub
         NODE_INTERNAL => {
             let mut bit_len = [0u8; 1];
             reader.read_exact(&mut bit_len)?;
-            let byte_count = (bit_len[0] as usize + 7) / 8;
+            let byte_count = (bit_len[0] as usize).div_ceil(8);
             let mut seg = [0u8; 33];
             seg[0] = bit_len[0];
             reader.read_exact(&mut seg[1..byte_count + 1])?;
             let prefix = PathSegment(seg);
             let left = Box::new(deserialize_node(reader)?);
             let right = Box::new(deserialize_node(reader)?);
-            Ok(SubTreeNode::Internal { prefix, left, right })
+            Ok(SubTreeNode::Internal {
+                prefix,
+                left,
+                right,
+            })
         }
         NODE_HASH => {
             let mut hash = [0u8; 32];

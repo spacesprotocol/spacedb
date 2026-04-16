@@ -1,14 +1,11 @@
 #[cfg(feature = "wasm")]
 mod wasm_api {
     use alloc::format;
-    use wasm_bindgen::prelude::{wasm_bindgen, JsValue};
     use js_sys::{Array, Uint8Array};
+    use wasm_bindgen::prelude::{JsValue, wasm_bindgen};
 
-    use crate::{
-        subtree::SubTree as NativeSubTree,
-        Sha256Hasher,
-    };
     use crate::subtree::ValueOrHash;
+    use crate::{Sha256Hasher, subtree::SubTree as NativeSubTree};
 
     #[wasm_bindgen]
     pub struct SubTree {
@@ -27,20 +24,22 @@ mod wasm_api {
                     let buf = array.to_vec();
                     NativeSubTree::from_slice(&buf)
                         .map(|inner| SubTree { inner })
-                        .map_err(|err| JsValue::from_str(&format!("Deserialization error: {:?}", err)))
+                        .map_err(|err| {
+                            JsValue::from_str(&format!("Deserialization error: {:?}", err))
+                        })
                 }
-                None => {
-                    Ok(SubTree {
-                        inner: NativeSubTree::empty(),
-                    })
-                }
+                None => Ok(SubTree {
+                    inner: NativeSubTree::empty(),
+                }),
             }
         }
 
         /// Serializes the SubTree to a Uint8Array.
         #[wasm_bindgen]
         pub fn to_bytes(&self) -> Result<Uint8Array, JsValue> {
-            let bytes = self.inner.to_vec()
+            let bytes = self
+                .inner
+                .to_vec()
                 .map_err(|err| JsValue::from_str(&format!("Serialization error: {:?}", err)))?;
             Ok(Uint8Array::from(&bytes[..]))
         }

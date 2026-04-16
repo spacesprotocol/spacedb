@@ -95,6 +95,13 @@ Subtrees work in `no_std` environments utilizing the SHA256 accelerator when run
 spacedb = { version = "0.1", default-features = false }
 ```
 
+The `hash-idx` feature enables an optional sqlite-backed sidecar that accelerates `prove` and `compute_root` on large trees:
+
+```toml
+[dependencies]
+spacedb = { version = "0.1", features = ["hash-idx"] }
+```
+
 
 ## Using Subtrees in wasm
 

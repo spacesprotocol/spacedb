@@ -1,5 +1,5 @@
-use spacedb::{Result, db::Database };
 use spacedb::tx::ProofType;
+use spacedb::{db::Database, Result};
 
 fn main() -> Result<()> {
     let db = Database::memory()?;
@@ -29,7 +29,10 @@ fn main() -> Result<()> {
     let subtree = snapshot.prove(&keys_to_prove, ProofType::Standard)?;
 
     // Will have the exact same root as the snapshot
-    println!("Subtree root: {}", hex::encode(subtree.compute_root().unwrap()));
+    println!(
+        "Subtree root: {}",
+        hex::encode(subtree.compute_root().unwrap())
+    );
 
     // Prove inclusion
     assert!(subtree.contains(&db.hash("key0".as_bytes())).unwrap());

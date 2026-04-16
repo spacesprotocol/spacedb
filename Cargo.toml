@@ -2,11 +2,25 @@ workspace = { members = ["example"] }
 
 [package]
 name = "spacedb"
-version = "0.0.12"
-edition = "2021"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
 description = "A cryptographically verifiable data store and universal accumulator for the Spaces protocol."
 repository = "https://github.com/spacesprotocol/spacedb"
+homepage = "https://spacesprotocol.org"
+documentation = "https://docs.rs/spacedb"
+readme = "README.md"
 license = "Apache-2.0"
+keywords = ["merkle", "trie", "accumulator", "verifiable", "no-std"]
+categories = ["database-implementations", "cryptography", "data-structures"]
+exclude = [
+    "example/*",
+    "tests/data/*",
+    "target/*",
+    ".github/*",
+    ".commitlintrc.yml",
+    "release-plz.toml",
+]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -35,3 +49,7 @@ std = ["libc", "hex", "bincode"]
 wasm = ["wasm-bindgen", "js-sys"]
 extras = []
 hash-idx = ["std", "rusqlite"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
