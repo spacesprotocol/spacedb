@@ -5,8 +5,6 @@ changelog_path = "CHANGELOG.md"
 changelog_update = true
 # Open a single release PR per push to main.
 pr_draft = false
-# Commit messages released by release-plz itself (should not trigger commitlint recursion).
-pr_name = "chore(release): {{ version }}"
 
 [changelog]
 header = """# Changelog
