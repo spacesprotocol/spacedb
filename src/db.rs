@@ -298,7 +298,7 @@ impl<H: NodeHasher> Database<H> {
         }
 
         // Sort by offset descending (most recent first)
-        index_files.sort_by(|a, b| b.0.cmp(&a.0));
+        index_files.sort_by_key(|entry| core::cmp::Reverse(entry.0));
 
         // Delete everything after the first `keep`
         for (_, path) in index_files.into_iter().skip(keep) {
