@@ -52,3 +52,9 @@ publish = true
 git_release_enable = true
 # Use the commit subject as the GitHub release title.
 git_tag_name = "v{{ version }}"
+
+# The example crate is a workspace member only so it can depend on the
+# in-tree spacedb; it should never be versioned or published.
+[[package]]
+name = "example"
+release = false
