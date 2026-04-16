@@ -1,11 +1,15 @@
-use crate::{Result, path::{Direction, Path}, subtree::ValueOrHash, Error};
+use crate::{
+    path::{Direction, Path},
+    subtree::ValueOrHash,
+    Error, Result,
+};
 
 use bincode::config;
 use core::marker::PhantomData;
 use std::{io, sync::MutexGuard};
 
 use crate::{
-    db::{Database, Record, SavePoint, EMPTY_RECORD, CHUNK_SIZE},
+    db::{Database, Record, SavePoint, CHUNK_SIZE, EMPTY_RECORD},
     node::{Node, NodeInner},
     path::{BitLength, PathUtils},
     subtree::{SubTree, SubTreeNode},
@@ -42,7 +46,9 @@ pub struct HashIndex {
 #[cfg(feature = "hash-idx")]
 impl Clone for HashIndex {
     fn clone(&self) -> Self {
-        Self { conn: self.conn.clone() }
+        Self {
+            conn: self.conn.clone(),
+        }
     }
 }
 
@@ -89,7 +95,9 @@ impl<H: NodeHasher> ReadTransaction<H> {
         };
 
         #[cfg(feature = "hash-idx")]
-        { let _ = tx.load_hash_index(); }
+        {
+            let _ = tx.load_hash_index();
+        }
 
         tx
     }
@@ -110,7 +118,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
     pub fn metadata(&self) -> &[u8] {
         match &self.savepoint.metadata {
             None => &[],
-            Some(meta) => meta.as_slice()
+            Some(meta) => meta.as_slice(),
         }
     }
 
@@ -121,7 +129,10 @@ impl<H: NodeHasher> ReadTransaction<H> {
         let path = std::path::Path::new(db_path);
         let stem = path.file_stem()?.to_str()?;
         let parent = path.parent().unwrap_or(std::path::Path::new("."));
-        let idx_path = parent.join(format!("{}.{}.hidx.sqlite", stem, self.savepoint.root.offset));
+        let idx_path = parent.join(format!(
+            "{}.{}.hidx.sqlite",
+            stem, self.savepoint.root.offset
+        ));
         idx_path.to_str().map(|s| s.to_string())
     }
 
@@ -135,22 +146,30 @@ impl<H: NodeHasher> ReadTransaction<H> {
             return Ok(());
         }
 
-        let idx_path = self.hash_index_path()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "Cannot build hash index for in-memory database"))?;
+        let idx_path = self.hash_index_path().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                "Cannot build hash index for in-memory database",
+            )
+        })?;
 
         // Compute fingerprint: hash of root node's raw bytes
-        let root_raw = self.db.file.read(self.savepoint.root.offset, self.savepoint.root.size as usize)?;
+        let root_raw = self.db.file.read(
+            self.savepoint.root.offset,
+            self.savepoint.root.size as usize,
+        )?;
         let fingerprint = H::hash(&root_raw);
 
         // Skip if a valid index already exists
         if std::path::Path::new(&idx_path).exists() {
             if let Ok(existing) = rusqlite::Connection::open_with_flags(
                 &idx_path,
-                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
             ) {
-                let stored: core::result::Result<Vec<u8>, _> = existing.query_row(
-                    "SELECT fingerprint FROM meta LIMIT 1", [], |row| row.get(0),
-                );
+                let stored: core::result::Result<Vec<u8>, _> =
+                    existing
+                        .query_row("SELECT fingerprint FROM meta LIMIT 1", [], |row| row.get(0));
                 if let Ok(stored) = stored {
                     if stored.len() == 32 && stored == fingerprint {
                         return Ok(());
@@ -161,8 +180,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
 
         // Create the sqlite sidecar
         let _ = std::fs::remove_file(&idx_path);
-        let conn = rusqlite::Connection::open(&idx_path)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let conn = rusqlite::Connection::open(&idx_path).map_err(io::Error::other)?;
 
         conn.execute_batch(
             "PRAGMA journal_mode = OFF;
@@ -170,8 +188,9 @@ impl<H: NodeHasher> ReadTransaction<H> {
              PRAGMA cache_size = -65536;
              PRAGMA page_size = 4096;
              CREATE TABLE hashes (offset INTEGER PRIMARY KEY, value BLOB NOT NULL) WITHOUT ROWID;
-             CREATE TABLE meta (fingerprint BLOB NOT NULL);"
-        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+             CREATE TABLE meta (fingerprint BLOB NOT NULL);",
+        )
+        .map_err(io::Error::other)?;
 
         // Walk tree bottom-up, flushing in batches
         let batch_size = 500_000;
@@ -188,7 +207,8 @@ impl<H: NodeHasher> ReadTransaction<H> {
         conn.execute(
             "INSERT INTO meta (fingerprint) VALUES (?1)",
             [&fingerprint[..]],
-        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        )
+        .map_err(io::Error::other)?;
 
         // Auto-load the index we just built
         let _ = self.load_hash_index();
@@ -202,22 +222,18 @@ impl<H: NodeHasher> ReadTransaction<H> {
     }
 
     #[cfg(feature = "hash-idx")]
-    fn flush_index_batch(
-        buffer: &[(u64, Hash)],
-        conn: &rusqlite::Connection,
-    ) -> Result<()> {
-        conn.execute_batch("BEGIN")
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    fn flush_index_batch(buffer: &[(u64, Hash)], conn: &rusqlite::Connection) -> Result<()> {
+        conn.execute_batch("BEGIN").map_err(io::Error::other)?;
         {
-            let mut stmt = conn.prepare_cached("INSERT OR REPLACE INTO hashes (offset, value) VALUES (?1, ?2)")
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            let mut stmt = conn
+                .prepare_cached("INSERT OR REPLACE INTO hashes (offset, value) VALUES (?1, ?2)")
+                .map_err(io::Error::other)?;
             for (offset, v) in buffer {
                 stmt.execute(rusqlite::params![offset, &v[..]])
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+                    .map_err(io::Error::other)?;
             }
         }
-        conn.execute_batch("COMMIT")
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        conn.execute_batch("COMMIT").map_err(io::Error::other)?;
         Ok(())
     }
 
@@ -241,7 +257,11 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 }
                 Ok(hash)
             }
-            NodeInner::Internal { prefix, left, right } => {
+            NodeInner::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 let left_hash = self.build_index_node(left.id, buffer, conn, batch_size)?;
                 let right_hash = self.build_index_node(right.id, buffer, conn, batch_size)?;
                 let hash = H::hash_internal(prefix.as_bytes(), &left_hash, &right_hash);
@@ -276,31 +296,35 @@ impl<H: NodeHasher> ReadTransaction<H> {
         let conn = rusqlite::Connection::open_with_flags(
             &idx_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        )
+        .map_err(io::Error::other)?;
 
         // Validate fingerprint
-        let root_raw = self.db.file.read(self.savepoint.root.offset, self.savepoint.root.size as usize)?;
+        let root_raw = self.db.file.read(
+            self.savepoint.root.offset,
+            self.savepoint.root.size as usize,
+        )?;
         let expected_fingerprint = H::hash(&root_raw);
 
-        let stored: Vec<u8> = conn.query_row(
-            "SELECT fingerprint FROM meta LIMIT 1",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let stored: Vec<u8> = conn
+            .query_row("SELECT fingerprint FROM meta LIMIT 1", [], |row| row.get(0))
+            .map_err(io::Error::other)?;
 
         if stored.len() != 32 || stored != expected_fingerprint {
             return Ok(false);
         }
 
-        self.hash_index = Some(HashIndex { conn: Arc::new(Mutex::new(conn)) });
+        self.hash_index = Some(HashIndex {
+            conn: Arc::new(Mutex::new(conn)),
+        });
         Ok(true)
     }
 
     /// Exports the current snapshot to a new database file.
     pub fn export(&self, path: &str) -> Result<()> {
-        use std::fs::OpenOptions;
-        use crate::fs::FileBackend;
         use crate::db::{DatabaseHeader, HEADER_SIZE};
+        use crate::fs::FileBackend;
+        use std::fs::OpenOptions;
 
         let file = OpenOptions::new()
             .read(true)
@@ -367,7 +391,11 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 let mut node = Node::from_leaf(key, value);
                 Ok(buffer.write_node(&mut node)?)
             }
-            NodeInner::Internal { prefix, left, right } => {
+            NodeInner::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 let new_left = if left.id == EMPTY_RECORD {
                     EMPTY_RECORD
                 } else {
@@ -392,7 +420,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
 
     pub fn get(&mut self, key: &Hash) -> Result<Option<Vec<u8>>> {
         if self.is_empty() {
-            return Ok(None)
+            return Ok(None);
         }
 
         let mut node = self.cache.node.take().unwrap();
@@ -409,7 +437,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
         let mut n = self.cache.node.take().unwrap();
         let h = {
             let entry = Self::hash_node(&self.db, &mut self.cache, &mut n, &self.hash_index)?;
-            entry.node.hash_cache.clone().unwrap()
+            entry.node.hash_cache.unwrap()
         };
         self.cache.node = Some(n);
         Ok(h)
@@ -421,10 +449,18 @@ impl<H: NodeHasher> ReadTransaction<H> {
         }
 
         let mut node = self.cache.node.take().unwrap();
-        let mut key_paths = keys.iter().map(|k| Path(k)).collect::<Vec<_>>();
+        let mut key_paths = keys.iter().map(Path).collect::<Vec<_>>();
         key_paths.sort();
 
-        match Self::prove_nodes(&self.db, &mut self.cache, &mut node, key_paths.as_slice(), 0, proof_type, &self.hash_index) {
+        match Self::prove_nodes(
+            &self.db,
+            &mut self.cache,
+            &mut node,
+            key_paths.as_slice(),
+            0,
+            proof_type,
+            &self.hash_index,
+        ) {
             Ok(info) => {
                 self.cache.node = Some(node);
                 Ok(SubTree::<H> {
@@ -471,7 +507,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 };
                 Ok(SubTreeNodeInfo {
                     node: SubTreeNode::Leaf {
-                        key: node_key.clone(),
+                        key: *node_key,
                         value_or_hash,
                     },
                     value_node: include_value,
@@ -492,23 +528,49 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 let split = keys.partition_point(|key| key.direction(depth) == Direction::Left);
                 let (left_keys, right_keys) = keys.split_at(split);
 
-                let mut left_subtree = if left_keys.is_empty() { None } else {
-                    Some(Self::prove_nodes(db, cache, left, left_keys, depth + 1, proof_type, hash_index)?)
+                let mut left_subtree = if left_keys.is_empty() {
+                    None
+                } else {
+                    Some(Self::prove_nodes(
+                        db,
+                        cache,
+                        left,
+                        left_keys,
+                        depth + 1,
+                        proof_type,
+                        hash_index,
+                    )?)
                 };
-                let mut right_subtree = if right_keys.is_empty() { None } else {
-                    Some(Self::prove_nodes(db, cache, right, right_keys, depth + 1, proof_type, hash_index)?)
+                let mut right_subtree = if right_keys.is_empty() {
+                    None
+                } else {
+                    Some(Self::prove_nodes(
+                        db,
+                        cache,
+                        right,
+                        right_keys,
+                        depth + 1,
+                        proof_type,
+                        hash_index,
+                    )?)
                 };
 
                 // Include extended hash of the sibling if its subtree isn't already part of the proof
-                if proof_type == ProofType::Extended && left_subtree.is_none() &&
-                    right_subtree.is_some() && right_subtree.as_ref().unwrap().value_node {
+                if proof_type == ProofType::Extended
+                    && left_subtree.is_none()
+                    && right_subtree.is_some()
+                    && right_subtree.as_ref().unwrap().value_node
+                {
                     left_subtree = Some(SubTreeNodeInfo {
                         node: Self::hash_node_extended(db, cache, left, hash_index)?,
                         value_node: false,
                     })
                 }
-                if proof_type == ProofType::Extended && right_subtree.is_none() &&
-                    left_subtree.is_some() && left_subtree.as_ref().unwrap().value_node {
+                if proof_type == ProofType::Extended
+                    && right_subtree.is_none()
+                    && left_subtree.is_some()
+                    && left_subtree.as_ref().unwrap().value_node
+                {
                     right_subtree = Some(SubTreeNodeInfo {
                         node: Self::hash_node_extended(db, cache, right, hash_index)?,
                         value_node: false,
@@ -518,7 +580,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 // If extended hashes aren't needed, include basic ones
                 if left_subtree.is_none() {
                     let left_entry = Self::hash_node(db, cache, left, hash_index)?;
-                    let left_hash = left_entry.node.hash_cache.clone().unwrap();
+                    let left_hash = left_entry.node.hash_cache.unwrap();
                     left_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(left_hash),
                         value_node: false,
@@ -526,7 +588,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 }
                 if right_subtree.is_none() {
                     let right_entry = Self::hash_node(db, cache, right, hash_index)?;
-                    let right_hash = right_entry.node.hash_cache.clone().unwrap();
+                    let right_hash = right_entry.node.hash_cache.unwrap();
                     right_subtree = Some(SubTreeNodeInfo {
                         node: SubTreeNode::Hash(right_hash),
                         value_node: false,
@@ -534,12 +596,12 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 }
 
                 // if left and right subtrees are value leafs, we need to include the sibling of this node
-                let value_node = left_subtree.as_ref().unwrap().value_node &&
-                    right_subtree.as_ref().unwrap().value_node;
+                let value_node = left_subtree.as_ref().unwrap().value_node
+                    && right_subtree.as_ref().unwrap().value_node;
 
                 Ok(SubTreeNodeInfo {
                     node: SubTreeNode::Internal {
-                        prefix: prefix.clone(),
+                        prefix: *prefix,
                         left: Box::new(left_subtree.unwrap().node),
                         right: Box::new(right_subtree.unwrap().node),
                     },
@@ -548,7 +610,6 @@ impl<H: NodeHasher> ReadTransaction<H> {
             }
         }
     }
-
 
     fn hash_node<'c>(
         db: &Database<H>,
@@ -621,7 +682,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
             NodeInner::Leaf { key, value } => {
                 let hash = H::hash(value);
                 Ok(SubTreeNode::Leaf {
-                    key: key.clone(),
+                    key: *key,
                     value_or_hash: ValueOrHash::Hash(hash),
                 })
             }
@@ -630,10 +691,18 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 left,
                 right,
             } => {
-                let left_hash = Self::hash_node(db, cache, left, hash_index)?.node.hash_cache.as_ref().unwrap().clone();
-                let right_hash = Self::hash_node(db, cache, right, hash_index)?.node.hash_cache.as_ref().unwrap().clone();
+                let left_hash = *Self::hash_node(db, cache, left, hash_index)?
+                    .node
+                    .hash_cache
+                    .as_ref()
+                    .unwrap();
+                let right_hash = *Self::hash_node(db, cache, right, hash_index)?
+                    .node
+                    .hash_cache
+                    .as_ref()
+                    .unwrap();
                 Ok(SubTreeNode::Internal {
-                    prefix: prefix.clone(),
+                    prefix: *prefix,
                     left: Box::new(SubTreeNode::Hash(left_hash)),
                     right: Box::new(SubTreeNode::Hash(right_hash)),
                 })
@@ -641,10 +710,10 @@ impl<H: NodeHasher> ReadTransaction<H> {
         }
     }
 
-    fn get_node<'c>(
+    fn get_node(
         db: &Database<H>,
         cache: &mut Cache,
-        node: &'c mut Node,
+        node: &mut Node,
         key: Path<&Hash>,
         depth: usize,
     ) -> Result<Option<Vec<u8>>> {
@@ -657,7 +726,7 @@ impl<H: NodeHasher> ReadTransaction<H> {
                 if node_key.0 == *key.0 {
                     return Ok(Some(value.clone()));
                 }
-                return Ok(None);
+                Ok(None)
             }
             NodeInner::Internal {
                 prefix,
@@ -676,7 +745,6 @@ impl<H: NodeHasher> ReadTransaction<H> {
         }
     }
 }
-
 
 impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
     pub(crate) fn new(db: &'db Database<H>) -> Self {
@@ -697,7 +765,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
 
     pub fn metadata(&mut self, metadata: Vec<u8>) -> Result<()> {
         if metadata.len() > 512 {
-            return Err(io::Error::new(io::ErrorKind::Other, "metadata must not exceed 512 bytes").into());
+            return Err(io::Error::other("metadata must not exceed 512 bytes").into());
         }
 
         self.metadata = Some(metadata);
@@ -831,16 +899,12 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         Ok(Node::from_internal(prefix, Box::new(left), Box::new(right)))
     }
 
-    fn delete_node(
-        &mut self,
-        node: Node,
-        key: Path<Hash>,
-        depth: usize,
-    ) -> Result<Option<Node>> {
+    fn delete_node(&mut self, node: Node, key: Path<Hash>, depth: usize) -> Result<Option<Node>> {
         let inner = self.read_inner(node)?;
-        return match inner {
+        match inner {
             NodeInner::Leaf {
-                key: node_key, value
+                key: node_key,
+                value,
             } => {
                 if node_key != key {
                     let node = Node::from_leaf(node_key, value);
@@ -864,31 +928,35 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
                                 let left_subtree = self.read_inner(*left)?;
                                 Ok(Some(self.lift_node(prefix, left_subtree, Direction::Left)))
                             }
-                            Some(right_subtree) => {
-                                Ok(Some(
-                                    Node::from_internal(prefix, left, Box::new(right_subtree))
-                                ))
-                            }
+                            Some(right_subtree) => Ok(Some(Node::from_internal(
+                                prefix,
+                                left,
+                                Box::new(right_subtree),
+                            ))),
                         }
                     }
                     Direction::Left => {
                         let left_subtree = self.delete_node(*left, key, depth + 1)?;
-                        return match left_subtree {
+                        match left_subtree {
                             None => {
                                 // Left subtree was deleted, move right subtree up
                                 let right_subtree = self.read_inner(*right)?;
-                                Ok(Some(self.lift_node(prefix, right_subtree, Direction::Right)))
+                                Ok(Some(self.lift_node(
+                                    prefix,
+                                    right_subtree,
+                                    Direction::Right,
+                                )))
                             }
-                            Some(left_subtree) => {
-                                Ok(Some(
-                                    Node::from_internal(prefix, Box::new(left_subtree), right)
-                                ))
-                            }
-                        };
+                            Some(left_subtree) => Ok(Some(Node::from_internal(
+                                prefix,
+                                Box::new(left_subtree),
+                                right,
+                            ))),
+                        }
                     }
                 }
             }
-        };
+        }
     }
 
     #[inline(always)]
@@ -899,21 +967,20 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         direction: Direction,
     ) -> Node {
         match node {
-            NodeInner::Leaf { key: leaf_key, value: leaf_value } => {
-                Node::from_leaf(leaf_key, leaf_value)
-            }
+            NodeInner::Leaf {
+                key: leaf_key,
+                value: leaf_value,
+            } => Node::from_leaf(leaf_key, leaf_value),
             NodeInner::Internal {
-                prefix:
-                child_prefix,
+                prefix: child_prefix,
                 left: child_left,
-                right: child_right
+                right: child_right,
             } => {
-
                 // Since this node is being lifted one level append a single bit
                 // based on its direction
                 match direction {
                     Direction::Left => parent_prefix.extend_from_byte(0, 1),
-                    Direction::Right => parent_prefix.extend_from_byte(0b1000_0000, 1)
+                    Direction::Right => parent_prefix.extend_from_byte(0b1000_0000, 1),
                 }
 
                 // Extend the parent's prefix with the node prefix being lifted
@@ -939,11 +1006,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
         })
     }
 
-    fn write_all(
-        &mut self,
-        buf: &mut WriteBuffer<BUFFER_SIZE>,
-        node: &mut Node,
-    ) -> Result<Record> {
+    fn write_all(&mut self, buf: &mut WriteBuffer<BUFFER_SIZE>, node: &mut Node) -> Result<Record> {
         match &mut node.inner {
             Some(NodeInner::Leaf { .. }) => {
                 node.id = buf.write_node(node)?;
@@ -963,7 +1026,6 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
 
         Ok(node.id)
     }
-
 
     pub fn commit(mut self) -> Result<()> {
         if self.state.is_none() && self.metadata.is_none() {
@@ -988,9 +1050,7 @@ impl<'db, H: NodeHasher> WriteTransaction<'db, H> {
 
         let root = match self.state.take() {
             None => self.header.savepoint.root,
-            Some(mut state) => {
-                self.write_all(&mut buf, &mut state)?
-            }
+            Some(mut state) => self.write_all(&mut buf, &mut state)?,
         };
 
         let previous_savepoint = buf.write_save_point(&self.header.savepoint)?;
@@ -1027,7 +1087,7 @@ impl<H: NodeHasher> KeyIterator<H> {
     }
 }
 
-impl<'db, H: NodeHasher> Iterator for KeyIterator<H> {
+impl<H: NodeHasher> Iterator for KeyIterator<H> {
     type Item = Result<(Hash, Vec<u8>)>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1045,7 +1105,7 @@ impl<'db, H: NodeHasher> Iterator for KeyIterator<H> {
                     self.next()
                 }
             },
-            Err(e) => Some(Err(Error::from(e))),
+            Err(e) => Some(Err(e)),
         }
     }
 }
@@ -1077,7 +1137,11 @@ impl Cache {
         self.len > self.max_len
     }
 
-    fn load_node<'c, H: NodeHasher>(&mut self, db: &Database<H>, node: &'c mut Node) -> Result<CacheEntry<'c>> {
+    fn load_node<'c, H: NodeHasher>(
+        &mut self,
+        db: &Database<H>,
+        node: &'c mut Node,
+    ) -> Result<CacheEntry<'c>> {
         if node.inner.is_some() {
             return Ok(CacheEntry { node, clean: false });
         }
@@ -1110,10 +1174,14 @@ mod tests {
     fn test_extended_proofs() {
         let db = Database::memory().unwrap();
         let tx = db.begin_write().unwrap();
-        tx.insert([0b1000_0000u8; 32], vec![1]).unwrap()
-          .insert([0b1100_0000u8; 32], vec![2]).unwrap()
-          .insert([0b0000_0000u8; 32], vec![3]).unwrap()
-          .commit().unwrap();
+        tx.insert([0b1000_0000u8; 32], vec![1])
+            .unwrap()
+            .insert([0b1100_0000u8; 32], vec![2])
+            .unwrap()
+            .insert([0b0000_0000u8; 32], vec![3])
+            .unwrap()
+            .commit()
+            .unwrap();
 
         let mut snapshot = db.begin_read().unwrap();
         let standard_subtree = snapshot.prove(&[[0u8; 32]], ProofType::Standard).unwrap();
@@ -1121,9 +1189,12 @@ mod tests {
         match standard_subtree.root {
             SubTreeNode::Internal { left, right, .. } => {
                 assert!(left.is_value_leaf(), "expected a value leaf on left");
-                assert!(matches!(*right, SubTreeNode::Hash(_)), "expected a hash node on the right");
+                assert!(
+                    matches!(*right, SubTreeNode::Hash(_)),
+                    "expected a hash node on the right"
+                );
             }
-            _ => panic!("invalid result")
+            _ => panic!("invalid result"),
         }
 
         let extended_subtree = snapshot.prove(&[[0u8; 32]], ProofType::Extended).unwrap();
@@ -1132,14 +1203,24 @@ mod tests {
                 assert!(left.is_value_leaf(), "expected a value leaf on left");
                 // Extended proof includes the sibling with terminal child hashes if any
                 match *right {
-                    SubTreeNode::Internal { left: left_left, right: left_right, .. } => {
-                        assert!(matches!(*left_left, SubTreeNode::Hash(_)), "expected a hash node");
-                        assert!(matches!(*left_right, SubTreeNode::Hash(_)), "expected a hash node");
+                    SubTreeNode::Internal {
+                        left: left_left,
+                        right: left_right,
+                        ..
+                    } => {
+                        assert!(
+                            matches!(*left_left, SubTreeNode::Hash(_)),
+                            "expected a hash node"
+                        );
+                        assert!(
+                            matches!(*left_right, SubTreeNode::Hash(_)),
+                            "expected a hash node"
+                        );
                     }
-                    _ => panic!("expected internal node")
+                    _ => panic!("expected internal node"),
                 }
             }
-            _ => panic!("invalid result")
+            _ => panic!("invalid result"),
         }
     }
 }

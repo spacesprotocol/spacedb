@@ -1,7 +1,11 @@
-use std::collections::HashSet;
-use spacedb::{db::Database, subtree::{SubTree, ValueOrHash}, NodeHasher, Sha256Hasher, Hash};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use spacedb::tx::{ProofType, ReadTransaction};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use spacedb::{
+    db::Database,
+    subtree::{SubTree, ValueOrHash},
+    Hash, NodeHasher, Sha256Hasher,
+};
+use std::collections::HashSet;
 
 #[test]
 fn it_proves_non_existence_single_key_opposite_path() {
@@ -14,9 +18,12 @@ fn it_proves_non_existence_single_key_opposite_path() {
         k
     };
 
-    db.begin_write().unwrap()
-        .insert(key_with_1, vec![1, 2, 3]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(key_with_1, vec![1, 2, 3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     // Try to prove a key starting with bit 0 (0b0xxx_xxxx)
     let key_with_0 = {
@@ -35,11 +42,11 @@ fn it_proves_non_existence_single_key_opposite_path() {
     assert_eq!(subtree.compute_root().unwrap(), tree_root);
 
     // contains should return false for the non-existent key (not error)
-    assert_eq!(subtree.contains(&key_with_0).unwrap(), false);
+    assert!(!subtree.contains(&key_with_0).unwrap());
 
     // The existing key is still visible in the proof (the leaf node contains its key)
     // but the value is hashed since we didn't ask for it
-    assert_eq!(subtree.contains(&key_with_1).unwrap(), true);
+    assert!(subtree.contains(&key_with_1).unwrap());
 }
 
 #[test]
@@ -57,19 +64,20 @@ fn it_proves_non_existence_when_key_diverges_at_prefix() {
     write.commit().unwrap();
 
     // Prove a key starting with bit 0 (completely different subtree)
-    let non_existent = [0u8; 32];  // all zeros
+    let non_existent = [0u8; 32]; // all zeros
 
     let mut snapshot = db.begin_read().unwrap();
-    let proof = snapshot.prove(&[non_existent], ProofType::Standard).unwrap();
+    let proof = snapshot
+        .prove(&[non_existent], ProofType::Standard)
+        .unwrap();
 
     let result = proof.contains(&non_existent);
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), false);
+    assert!(!result.unwrap());
 }
 
 #[test]
 fn subtree_borsh_serialization_roundtrip() {
-
     let db = Database::memory().unwrap();
     let mut write = db.begin_write().unwrap();
 
@@ -82,14 +90,17 @@ fn subtree_borsh_serialization_roundtrip() {
     write.commit().unwrap();
 
     // Create a proof for some keys
-    let keys_to_prove: Vec<Hash> = (0u8..5).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k
-    }).collect();
+    let keys_to_prove: Vec<Hash> = (0u8..5)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k
+        })
+        .collect();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&keys_to_prove, ProofType::Standard).unwrap();
+    let subtree: SubTree<Sha256Hasher> =
+        snapshot.prove(&keys_to_prove, ProofType::Standard).unwrap();
     let original_root = subtree.compute_root().unwrap();
 
     // Serialize and deserialize
@@ -127,21 +138,29 @@ fn subtree_prove_creates_smaller_proof() {
 
     // Get a proof for all 10 keys from the main tree
     let mut snapshot = db.begin_read().unwrap();
-    let all_keys: Vec<Hash> = (0u8..10).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k
-    }).collect();
-    let full_subtree: SubTree<Sha256Hasher> = snapshot.prove(&all_keys, spacedb::tx::ProofType::Standard).unwrap();
+    let all_keys: Vec<Hash> = (0u8..10)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k
+        })
+        .collect();
+    let full_subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&all_keys, spacedb::tx::ProofType::Standard)
+        .unwrap();
     let full_root = full_subtree.compute_root().unwrap();
 
     // Now create a smaller proof from the subtree for just 2 keys
-    let subset_keys: Vec<Hash> = (0u8..2).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k
-    }).collect();
-    let smaller_subtree = full_subtree.prove(&subset_keys, ProofType::Standard).unwrap();
+    let subset_keys: Vec<Hash> = (0u8..2)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k
+        })
+        .collect();
+    let smaller_subtree = full_subtree
+        .prove(&subset_keys, ProofType::Standard)
+        .unwrap();
 
     // Root should still match
     assert_eq!(smaller_subtree.compute_root().unwrap(), full_root);
@@ -161,9 +180,12 @@ fn subtree_prove_creates_smaller_proof() {
     // Serialized size should be smaller (fewer values included)
     let full_serialized = borsh::to_vec(&full_subtree).unwrap();
     let smaller_serialized = borsh::to_vec(&smaller_subtree).unwrap();
-    assert!(smaller_serialized.len() < full_serialized.len(),
+    assert!(
+        smaller_serialized.len() < full_serialized.len(),
         "smaller proof should serialize to fewer bytes: {} vs {}",
-        smaller_serialized.len(), full_serialized.len());
+        smaller_serialized.len(),
+        full_serialized.len()
+    );
 }
 
 #[test]
@@ -175,7 +197,10 @@ fn subtree_prove_empty_subtree() {
 
     let result = empty.prove(&[key], ProofType::Standard).unwrap();
     assert!(result.is_empty());
-    assert_eq!(result.compute_root().unwrap(), empty.compute_root().unwrap());
+    assert_eq!(
+        result.compute_root().unwrap(),
+        empty.compute_root().unwrap()
+    );
 }
 
 #[test]
@@ -192,20 +217,26 @@ fn subtree_prove_nonexistent_keys() {
     write.commit().unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let all_keys: Vec<Hash> = (0u8..5).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i * 2;
-        k
-    }).collect();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&all_keys, spacedb::tx::ProofType::Standard).unwrap();
+    let all_keys: Vec<Hash> = (0u8..5)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i * 2;
+            k
+        })
+        .collect();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&all_keys, spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = subtree.compute_root().unwrap();
 
     // Prove keys that don't exist (odd numbers)
-    let nonexistent: Vec<Hash> = (0u8..3).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i * 2 + 1; // 1, 3, 5
-        k
-    }).collect();
+    let nonexistent: Vec<Hash> = (0u8..3)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i * 2 + 1; // 1, 3, 5
+            k
+        })
+        .collect();
     let proof = subtree.prove(&nonexistent, ProofType::Standard).unwrap();
 
     // Root should still match
@@ -213,7 +244,10 @@ fn subtree_prove_nonexistent_keys() {
 
     // Non-existent keys should return false (not error)
     for key in &nonexistent {
-        assert!(!proof.contains(key).unwrap(), "nonexistent key should return false");
+        assert!(
+            !proof.contains(key).unwrap(),
+            "nonexistent key should return false"
+        );
     }
 }
 
@@ -235,7 +269,9 @@ fn subtree_prove_through_hash_node_fails() {
 
     let mut snapshot = db.begin_read().unwrap();
     // Only prove key_left - key_right becomes a hash node
-    let partial_subtree: SubTree<Sha256Hasher> = snapshot.prove(&[key_left], spacedb::tx::ProofType::Standard).unwrap();
+    let partial_subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key_left], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Now try to prove key_right from the partial subtree - should fail
     let result = partial_subtree.prove(&[key_right], ProofType::Standard);
@@ -248,16 +284,23 @@ fn subtree_prove_duplicate_keys() {
 
     let db = Database::memory().unwrap();
     let key = [42u8; 32];
-    db.begin_write().unwrap()
-        .insert(key, vec![1, 2, 3]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(key, vec![1, 2, 3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&[key], spacedb::tx::ProofType::Standard).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key], spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = subtree.compute_root().unwrap();
 
     // Prove with duplicate keys
-    let proof = subtree.prove(&[key, key, key], ProofType::Standard).unwrap();
+    let proof = subtree
+        .prove(&[key, key, key], ProofType::Standard)
+        .unwrap();
     assert_eq!(proof.compute_root().unwrap(), original_root);
     assert!(proof.contains(&key).unwrap());
 }
@@ -269,11 +312,13 @@ fn subtree_prove_order_independence() {
     let db = Database::memory().unwrap();
     let mut write = db.begin_write().unwrap();
 
-    let keys: Vec<Hash> = (0u8..5).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k
-    }).collect();
+    let keys: Vec<Hash> = (0u8..5)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k
+        })
+        .collect();
 
     for (i, key) in keys.iter().enumerate() {
         write = write.insert(*key, vec![i as u8]).unwrap();
@@ -281,13 +326,19 @@ fn subtree_prove_order_independence() {
     write.commit().unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&keys, spacedb::tx::ProofType::Standard).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&keys, spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Prove in forward order
-    let proof_forward = subtree.prove(&[keys[0], keys[1], keys[2]], ProofType::Standard).unwrap();
+    let proof_forward = subtree
+        .prove(&[keys[0], keys[1], keys[2]], ProofType::Standard)
+        .unwrap();
 
     // Prove in reverse order
-    let proof_reverse = subtree.prove(&[keys[2], keys[1], keys[0]], ProofType::Standard).unwrap();
+    let proof_reverse = subtree
+        .prove(&[keys[2], keys[1], keys[0]], ProofType::Standard)
+        .unwrap();
 
     // Both should produce same root
     assert_eq!(
@@ -298,7 +349,10 @@ fn subtree_prove_order_independence() {
     // Both should have same serialized form
     let ser_forward = borsh::to_vec(&proof_forward).unwrap();
     let ser_reverse = borsh::to_vec(&proof_reverse).unwrap();
-    assert_eq!(ser_forward, ser_reverse, "order should not affect proof structure");
+    assert_eq!(
+        ser_forward, ser_reverse,
+        "order should not affect proof structure"
+    );
 }
 
 #[test]
@@ -308,11 +362,13 @@ fn subtree_prove_chained() {
     let db = Database::memory().unwrap();
     let mut write = db.begin_write().unwrap();
 
-    let keys: Vec<Hash> = (0u8..10).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k
-    }).collect();
+    let keys: Vec<Hash> = (0u8..10)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k
+        })
+        .collect();
 
     for (i, key) in keys.iter().enumerate() {
         write = write.insert(*key, vec![i as u8; 50]).unwrap();
@@ -321,10 +377,14 @@ fn subtree_prove_chained() {
 
     let mut snapshot = db.begin_read().unwrap();
     let original_root = snapshot.compute_root().unwrap();
-    let full_subtree: SubTree<Sha256Hasher> = snapshot.prove(&keys, spacedb::tx::ProofType::Standard).unwrap();
+    let full_subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&keys, spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // First prove: 10 keys -> 5 keys
-    let proof1 = full_subtree.prove(&keys[0..5], ProofType::Standard).unwrap();
+    let proof1 = full_subtree
+        .prove(&keys[0..5], ProofType::Standard)
+        .unwrap();
     assert_eq!(proof1.compute_root().unwrap(), original_root);
 
     // Second prove: 5 keys -> 2 keys
@@ -361,26 +421,38 @@ fn subtree_prove_extended_includes_sibling_leaves() {
     let mut key_b = [0xFFu8; 32];
     key_b[31] = 0b1111_1111; // ends in 1
 
-    db.begin_write().unwrap()
-        .insert(key_a, vec![0xAA]).unwrap()
-        .insert(key_b, vec![0xBB]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(key_a, vec![0xAA])
+        .unwrap()
+        .insert(key_b, vec![0xBB])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let full_subtree: SubTree<Sha256Hasher> = snapshot.prove(&[key_a, key_b], spacedb::tx::ProofType::Standard).unwrap();
+    let full_subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key_a, key_b], spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = full_subtree.compute_root().unwrap();
 
     // Standard proof of key_a - key_b becomes Hash node
     let standard_proof = full_subtree.prove(&[key_a], ProofType::Standard).unwrap();
     assert_eq!(standard_proof.compute_root().unwrap(), original_root);
-    assert!(standard_proof.contains(&key_b).is_err(), "standard proof should have hash node for sibling");
+    assert!(
+        standard_proof.contains(&key_b).is_err(),
+        "standard proof should have hash node for sibling"
+    );
 
     // Extended proof of key_a - key_b should be a leaf with hashed value
     let extended_proof = full_subtree.prove(&[key_a], ProofType::Extended).unwrap();
     assert_eq!(extended_proof.compute_root().unwrap(), original_root);
     // In extended proof, sibling leaf structure is preserved (key visible, value hashed)
     // So contains should return true (key is there) but value is hashed
-    assert!(extended_proof.contains(&key_b).unwrap(), "extended proof should preserve sibling leaf key");
+    assert!(
+        extended_proof.contains(&key_b).unwrap(),
+        "extended proof should preserve sibling leaf key"
+    );
 }
 
 #[test]
@@ -391,12 +463,17 @@ fn subtree_prove_single_key_tree() {
     let key = [0x42u8; 32];
     let value = vec![1, 2, 3, 4, 5];
 
-    db.begin_write().unwrap()
-        .insert(key, value.clone()).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(key, value.clone())
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&[key], spacedb::tx::ProofType::Standard).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key], spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = subtree.compute_root().unwrap();
 
     // Prove the same key
@@ -430,11 +507,13 @@ fn mixed_existence_proof() {
     let tree_root = snapshot.compute_root().unwrap();
 
     // Prove a mix of existing (0, 2, 4) and non-existing (1, 3, 5) keys
-    let keys_to_prove: Vec<Hash> = (0u8..6).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k
-    }).collect();
+    let keys_to_prove: Vec<Hash> = (0u8..6)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k
+        })
+        .collect();
 
     let subtree = snapshot.prove(&keys_to_prove, ProofType::Standard).unwrap();
 
@@ -472,10 +551,14 @@ fn adjacent_keys_differ_by_one_bit() {
         k
     };
 
-    db.begin_write().unwrap()
-        .insert(key_a, vec![0xAA]).unwrap()
-        .insert(key_b, vec![0xBB]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(key_a, vec![0xAA])
+        .unwrap()
+        .insert(key_b, vec![0xBB])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
     let tree_root = snapshot.compute_root().unwrap();
@@ -485,7 +568,10 @@ fn adjacent_keys_differ_by_one_bit() {
     assert_eq!(subtree.compute_root().unwrap(), tree_root);
     assert!(subtree.contains(&key_a).unwrap());
     // key_b is a sibling hash node - we can't prove it exists without its own proof
-    assert!(subtree.contains(&key_b).is_err(), "key_b should be incomplete proof");
+    assert!(
+        subtree.contains(&key_b).is_err(),
+        "key_b should be incomplete proof"
+    );
 
     // Prove only key_b
     let mut snapshot = db.begin_read().unwrap();
@@ -493,11 +579,16 @@ fn adjacent_keys_differ_by_one_bit() {
     assert_eq!(subtree.compute_root().unwrap(), tree_root);
     assert!(subtree.contains(&key_b).unwrap());
     // key_a is a sibling hash node
-    assert!(subtree.contains(&key_a).is_err(), "key_a should be incomplete proof");
+    assert!(
+        subtree.contains(&key_a).is_err(),
+        "key_a should be incomplete proof"
+    );
 
     // Prove both keys together
     let mut snapshot = db.begin_read().unwrap();
-    let subtree = snapshot.prove(&[key_a, key_b], ProofType::Standard).unwrap();
+    let subtree = snapshot
+        .prove(&[key_a, key_b], ProofType::Standard)
+        .unwrap();
     assert_eq!(subtree.compute_root().unwrap(), tree_root);
     assert!(subtree.contains(&key_a).unwrap());
     assert!(subtree.contains(&key_b).unwrap());
@@ -523,7 +614,7 @@ fn it_works_with_empty_trees() {
         "empty subtree must return zero hash"
     );
 
-    assert_eq!(subtree.contains(&foo).unwrap(), false)
+    assert!(!subtree.contains(&foo).unwrap())
 }
 
 #[test]
@@ -533,7 +624,7 @@ fn it_inserts_into_tree() {
     let key = db.hash(&[]);
     let value = "some data".as_bytes().to_vec();
 
-    tx.insert(key.clone(), value.clone()).unwrap().commit().unwrap();
+    tx.insert(key, value.clone()).unwrap().commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
 
@@ -559,10 +650,10 @@ fn it_inserts_many_items_into_tree() {
     let mut keys = Vec::new();
     for i in 0..100 {
         let key = Sha256Hasher::hash(format!("key{}", i).as_bytes());
-        keys.push(key.clone());
+        keys.push(key);
         let value = format!("data{}", i).as_bytes().to_vec();
 
-        tx = tx.insert(key.clone(), value.clone()).unwrap();
+        tx = tx.insert(key, value.clone()).unwrap();
         subtree.insert(key, ValueOrHash::Value(value)).unwrap();
     }
 
@@ -624,13 +715,17 @@ fn it_should_iterate_over_tree() {
 fn it_returns_none_when_key_not_exists() {
     let db = Database::memory().unwrap();
     let mut snapshot = db.begin_read().unwrap();
-    assert_eq!(snapshot.get(&[0u8; 32]).unwrap(), None, "empty tree should return none");
+    assert_eq!(
+        snapshot.get(&[0u8; 32]).unwrap(),
+        None,
+        "empty tree should return none"
+    );
 
     let mut tx = db.begin_write().unwrap();
     let key = db.hash(&[]);
     let value = "some data".as_bytes().to_vec();
 
-    tx = tx.insert(key.clone(), value.clone()).unwrap();
+    tx = tx.insert(key, value.clone()).unwrap();
     tx.commit().unwrap();
 
     let mut tree = db.begin_read().unwrap();
@@ -731,7 +826,10 @@ fn it_should_delete_elements_from_subtree() {
     let root_with_entire_sample_size = db.begin_read().unwrap().compute_root().unwrap();
     assert_ne!(expected_root_after_deletion, root_with_entire_sample_size);
 
-    let key_hashes: Vec<Hash> = keys_to_delete.iter().map(|k: &u32| u32_to_key(*k)).collect();
+    let key_hashes: Vec<Hash> = keys_to_delete
+        .iter()
+        .map(|k: &u32| u32_to_key(*k))
+        .collect();
     let mut snapshot = db.begin_read().unwrap();
     let mut subtree = snapshot.prove(&key_hashes, ProofType::Extended).unwrap();
 
@@ -765,13 +863,15 @@ fn it_should_store_metadata() {
     let snapshot = db.begin_read().unwrap();
     assert_eq!(snapshot.metadata(), "snapshot 1".as_bytes());
 
-    let snapshots: Vec<ReadTransaction<Sha256Hasher>> = db.iter()
-        .map(|s| s.unwrap()).collect();
+    let snapshots: Vec<ReadTransaction<Sha256Hasher>> = db.iter().map(|s| s.unwrap()).collect();
 
     assert_eq!(snapshots.len(), 2);
 
     for (index, snapshot) in snapshots.iter().rev().enumerate() {
-        assert_eq!(String::from_utf8_lossy(snapshot.metadata()), format!("snapshot {}", index));
+        assert_eq!(
+            String::from_utf8_lossy(snapshot.metadata()),
+            format!("snapshot {}", index)
+        );
     }
 }
 
@@ -784,7 +884,10 @@ fn it_should_rollback() -> spacedb::Result<()> {
     for snapshot_index in 0..snapshots_len {
         let mut tx = db.begin_write()?;
         for entry in 0..items_per_snapshot {
-            tx = tx.insert(u32_to_key((snapshot_index * entry) as u32), entry.to_be_bytes().to_vec())?;
+            tx = tx.insert(
+                u32_to_key((snapshot_index * entry) as u32),
+                entry.to_be_bytes().to_vec(),
+            )?;
         }
         tx.commit()?;
     }
@@ -793,7 +896,11 @@ fn it_should_rollback() -> spacedb::Result<()> {
     for snapshot in db.iter() {
         roots.push(snapshot?.compute_root()?)
     }
-    assert_eq!(roots.len(), snapshots_len, "expected roots == snapshots len");
+    assert_eq!(
+        roots.len(),
+        snapshots_len,
+        "expected roots == snapshots len"
+    );
 
     // try rolling back latest snapshot
     let snapshot = db.begin_read()?;
@@ -802,16 +909,24 @@ fn it_should_rollback() -> spacedb::Result<()> {
     // confirm we still have the same snapshot
     let mut snapshot = db.begin_read()?;
 
-    assert_eq!(&snapshot.compute_root()?, roots.first().unwrap(), "bad roots");
+    assert_eq!(
+        &snapshot.compute_root()?,
+        roots.first().unwrap(),
+        "bad roots"
+    );
 
     // rollback the 6th snapshot
-    db.iter().skip(5).next().unwrap()?.rollback()?;
+    db.iter().nth(5).unwrap()?.rollback()?;
     let snapshots_len = snapshots_len - 5;
     assert_eq!(db.iter().count(), snapshots_len, "snapshot count mismatch");
 
     // db should now point to the snapshot we just rolled back
     let mut snapshot = db.begin_read()?;
-    assert_eq!(&snapshot.compute_root()?, roots.iter().skip(5).next().unwrap(), "bad roots");
+    assert_eq!(
+        &snapshot.compute_root()?,
+        roots.get(5).unwrap(),
+        "bad roots"
+    );
     Ok(())
 }
 
@@ -831,8 +946,12 @@ fn subtree_merge_disjoint_proofs() {
     let original_root = snapshot.compute_root().unwrap();
 
     // Create two separate proofs for each key
-    let proof1: SubTree<Sha256Hasher> = snapshot.prove(&[key1], spacedb::tx::ProofType::Standard).unwrap();
-    let proof2: SubTree<Sha256Hasher> = snapshot.prove(&[key2], spacedb::tx::ProofType::Standard).unwrap();
+    let proof1: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key1], spacedb::tx::ProofType::Standard)
+        .unwrap();
+    let proof2: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key2], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Verify each proof individually
     assert_eq!(proof1.compute_root().unwrap(), original_root);
@@ -873,8 +992,12 @@ fn subtree_merge_overlapping_proofs() {
     let original_root = snapshot.compute_root().unwrap();
 
     // Create overlapping proofs
-    let proof12: SubTree<Sha256Hasher> = snapshot.prove(&[key1, key2], spacedb::tx::ProofType::Standard).unwrap();
-    let proof23: SubTree<Sha256Hasher> = snapshot.prove(&[key2, key3], spacedb::tx::ProofType::Standard).unwrap();
+    let proof12: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key1, key2], spacedb::tx::ProofType::Standard)
+        .unwrap();
+    let proof23: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key2, key3], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Merge them
     let merged = proof12.merge(proof23).unwrap();
@@ -889,12 +1012,17 @@ fn subtree_merge_overlapping_proofs() {
 #[test]
 fn subtree_merge_with_empty() {
     let db = Database::memory().unwrap();
-    db.begin_write().unwrap()
-        .insert([1u8; 32], vec![1, 2, 3]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert([1u8; 32], vec![1, 2, 3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = subtree.compute_root().unwrap();
 
     let empty: SubTree<Sha256Hasher> = SubTree::empty();
@@ -910,13 +1038,20 @@ fn subtree_merge_with_empty() {
 #[test]
 fn subtree_merge_identical_proofs() {
     let db = Database::memory().unwrap();
-    db.begin_write().unwrap()
-        .insert([1u8; 32], vec![1, 2, 3]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert([1u8; 32], vec![1, 2, 3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let proof1: SubTree<Sha256Hasher> = snapshot.prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard).unwrap();
-    let proof2: SubTree<Sha256Hasher> = snapshot.prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard).unwrap();
+    let proof1: SubTree<Sha256Hasher> = snapshot
+        .prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard)
+        .unwrap();
+    let proof2: SubTree<Sha256Hasher> = snapshot
+        .prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = proof1.compute_root().unwrap();
 
     // Merging identical proofs should work
@@ -929,20 +1064,30 @@ fn subtree_merge_identical_proofs() {
 fn subtree_merge_mismatched_roots_fails() {
     // Create two different databases with different data
     let db1 = Database::memory().unwrap();
-    db1.begin_write().unwrap()
-        .insert([1u8; 32], vec![1, 2, 3]).unwrap()
-        .commit().unwrap();
+    db1.begin_write()
+        .unwrap()
+        .insert([1u8; 32], vec![1, 2, 3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let db2 = Database::memory().unwrap();
-    db2.begin_write().unwrap()
-        .insert([2u8; 32], vec![4, 5, 6]).unwrap()
-        .commit().unwrap();
+    db2.begin_write()
+        .unwrap()
+        .insert([2u8; 32], vec![4, 5, 6])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot1 = db1.begin_read().unwrap();
     let mut snapshot2 = db2.begin_read().unwrap();
 
-    let proof1: SubTree<Sha256Hasher> = snapshot1.prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard).unwrap();
-    let proof2: SubTree<Sha256Hasher> = snapshot2.prove(&[[2u8; 32]], spacedb::tx::ProofType::Standard).unwrap();
+    let proof1: SubTree<Sha256Hasher> = snapshot1
+        .prove(&[[1u8; 32]], spacedb::tx::ProofType::Standard)
+        .unwrap();
+    let proof2: SubTree<Sha256Hasher> = snapshot2
+        .prove(&[[2u8; 32]], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // These have different roots, merge should fail
     assert!(proof1.merge(proof2).is_err());
@@ -967,10 +1112,9 @@ fn subtree_bucket_hashes_basic() {
     write.commit().unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(
-        &[key00, key01, key10],
-        spacedb::tx::ProofType::Standard
-    ).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key00, key01, key10], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Get bucket hashes with 2 bits (4 buckets)
     let hashes = subtree.bucket_hashes(2);
@@ -1000,10 +1144,9 @@ fn subtree_bucket_hashes_single_bit() {
     write.commit().unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(
-        &[key0a, key0b, key1],
-        spacedb::tx::ProofType::Standard
-    ).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key0a, key0b, key1], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Get bucket hashes with 1 bit (2 buckets)
     let hashes = subtree.bucket_hashes(1);
@@ -1035,16 +1178,15 @@ fn subtree_get_prefix_basic() {
     write.commit().unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(
-        &[key00, key01, key10],
-        spacedb::tx::ProofType::Standard
-    ).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[key00, key01, key10], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
     // Get subtree for prefix "0" (should contain key00 and key01)
     let prefix_0 = subtree.get_prefix(&[false]).unwrap();
     assert!(prefix_0.contains(&key00).unwrap());
     assert!(prefix_0.contains(&key01).unwrap());
-    assert!(!prefix_0.contains(&key10).is_ok() || !prefix_0.contains(&key10).unwrap());
+    assert!(prefix_0.contains(&key10).is_err() || !prefix_0.contains(&key10).unwrap());
 
     // Get subtree for prefix "1" (should contain key10)
     let prefix_1 = subtree.get_prefix(&[true]).unwrap();
@@ -1058,15 +1200,17 @@ fn subtree_get_prefix_basic() {
 #[test]
 fn subtree_get_prefix_no_match() {
     let db = Database::memory().unwrap();
-    db.begin_write().unwrap()
-        .insert([0x00u8; 32], vec![1]).unwrap()  // starts with 0
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert([0x00u8; 32], vec![1])
+        .unwrap() // starts with 0
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    let subtree: SubTree<Sha256Hasher> = snapshot.prove(
-        &[[0x00u8; 32]],
-        spacedb::tx::ProofType::Standard
-    ).unwrap();
+    let subtree: SubTree<Sha256Hasher> = snapshot
+        .prove(&[[0x00u8; 32]], spacedb::tx::ProofType::Standard)
+        .unwrap();
     let original_root = subtree.compute_root().unwrap();
 
     // Get prefix "1" - no keys start with 1
@@ -1092,40 +1236,61 @@ fn subtree_bucket_hashes_sync_scenario() {
     // Bob has an extra key
     let bob_only = [0x80u8; 32];
 
-    alice_db.begin_write().unwrap()
-        .insert(shared1, vec![1]).unwrap()
-        .insert(shared2, vec![2]).unwrap()
-        .commit().unwrap();
+    alice_db
+        .begin_write()
+        .unwrap()
+        .insert(shared1, vec![1])
+        .unwrap()
+        .insert(shared2, vec![2])
+        .unwrap()
+        .commit()
+        .unwrap();
 
-    bob_db.begin_write().unwrap()
-        .insert(shared1, vec![1]).unwrap()
-        .insert(shared2, vec![2]).unwrap()
-        .insert(bob_only, vec![3]).unwrap()
-        .commit().unwrap();
+    bob_db
+        .begin_write()
+        .unwrap()
+        .insert(shared1, vec![1])
+        .unwrap()
+        .insert(shared2, vec![2])
+        .unwrap()
+        .insert(bob_only, vec![3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut alice_snapshot = alice_db.begin_read().unwrap();
     let mut bob_snapshot = bob_db.begin_read().unwrap();
 
-    let alice_tree: SubTree<Sha256Hasher> = alice_snapshot.prove(
-        &[shared1, shared2],
-        spacedb::tx::ProofType::Standard
-    ).unwrap();
+    let alice_tree: SubTree<Sha256Hasher> = alice_snapshot
+        .prove(&[shared1, shared2], spacedb::tx::ProofType::Standard)
+        .unwrap();
 
-    let bob_tree: SubTree<Sha256Hasher> = bob_snapshot.prove(
-        &[shared1, shared2, bob_only],
-        spacedb::tx::ProofType::Standard
-    ).unwrap();
+    let bob_tree: SubTree<Sha256Hasher> = bob_snapshot
+        .prove(
+            &[shared1, shared2, bob_only],
+            spacedb::tx::ProofType::Standard,
+        )
+        .unwrap();
 
     // Compare bucket hashes at 2 bits
     let alice_hashes = alice_tree.bucket_hashes(2);
     let bob_hashes = bob_tree.bucket_hashes(2);
 
     // Buckets 00 and 01 should match (shared keys)
-    assert_eq!(alice_hashes[0b00], bob_hashes[0b00], "bucket 00 should match");
-    assert_eq!(alice_hashes[0b01], bob_hashes[0b01], "bucket 01 should match");
+    assert_eq!(
+        alice_hashes[0b00], bob_hashes[0b00],
+        "bucket 00 should match"
+    );
+    assert_eq!(
+        alice_hashes[0b01], bob_hashes[0b01],
+        "bucket 01 should match"
+    );
 
     // Bucket 10 should differ (Bob has extra key)
-    assert_ne!(alice_hashes[0b10], bob_hashes[0b10], "bucket 10 should differ");
+    assert_ne!(
+        alice_hashes[0b10], bob_hashes[0b10],
+        "bucket 10 should differ"
+    );
 
     // Alice can now request bucket 10 from Bob
     let bob_prefix_10 = bob_tree.get_prefix(&[true, false]).unwrap();
@@ -1134,7 +1299,7 @@ fn subtree_bucket_hashes_sync_scenario() {
 
 #[test]
 fn subtree_sync_100k_keys_80_differ() {
-    use spacedb::subtree::{ValueOrHash, DiffSession, DiffRequest, DiffResponse};
+    use spacedb::subtree::{DiffRequest, DiffResponse, DiffSession, ValueOrHash};
 
     fn make_key(n: u32) -> Hash {
         Sha256Hasher::hash(&n.to_le_bytes())
@@ -1143,14 +1308,18 @@ fn subtree_sync_100k_keys_80_differ() {
     // Alice: 100k keys, Bob: 100k + 80 extra + 1 modified
     let mut alice: SubTree<Sha256Hasher> = SubTree::empty();
     for i in 0..100_000u32 {
-        alice.insert(make_key(i), ValueOrHash::Value(vec![(i % 256) as u8])).unwrap();
+        alice
+            .insert(make_key(i), ValueOrHash::Value(vec![(i % 256) as u8]))
+            .unwrap();
     }
 
     let mut bob = alice.clone();
     for i in 100_000..100_080u32 {
-        bob.insert(make_key(i), ValueOrHash::Value(vec![0xBB])).unwrap();
+        bob.insert(make_key(i), ValueOrHash::Value(vec![0xBB]))
+            .unwrap();
     }
-    bob.update(make_key(100), ValueOrHash::Value(vec![0xCC])).unwrap(); // modify one
+    bob.update(make_key(100), ValueOrHash::Value(vec![0xCC]))
+        .unwrap(); // modify one
 
     let bob_root = bob.compute_root().unwrap();
     assert_ne!(alice.compute_root().unwrap(), bob_root);
@@ -1194,12 +1363,14 @@ fn compare_encoding_sizes() {
     }
     write.commit().unwrap();
 
-    let all_keys: Vec<Hash> = (0u8..50).map(|i| {
-        let mut k = [0u8; 32];
-        k[0] = i;
-        k[1] = i.wrapping_mul(37);
-        k
-    }).collect();
+    let all_keys: Vec<Hash> = (0u8..50)
+        .map(|i| {
+            let mut k = [0u8; 32];
+            k[0] = i;
+            k[1] = i.wrapping_mul(37);
+            k
+        })
+        .collect();
 
     let mut snapshot = db.begin_read().unwrap();
 
@@ -1208,10 +1379,14 @@ fn compare_encoding_sizes() {
 
     // Partial proof (mix of values and hash nodes)
     let partial_keys: Vec<Hash> = all_keys[..10].to_vec();
-    let partial_proof = full_proof.prove(&partial_keys, spacedb::subtree::ProofType::Standard).unwrap();
+    let partial_proof = full_proof
+        .prove(&partial_keys, spacedb::subtree::ProofType::Standard)
+        .unwrap();
 
     // Single leaf
-    let single_proof = full_proof.prove(&all_keys[..1], spacedb::subtree::ProofType::Standard).unwrap();
+    let single_proof = full_proof
+        .prove(&all_keys[..1], spacedb::subtree::ProofType::Standard)
+        .unwrap();
 
     for (label, subtree) in [
         ("full (50 keys)", &full_proof),
@@ -1224,7 +1399,10 @@ fn compare_encoding_sizes() {
 
         // Verify round-trip
         let deserialized: SubTree<Sha256Hasher> = borsh::from_slice(&bytes).unwrap();
-        assert_eq!(deserialized.compute_root().unwrap(), subtree.compute_root().unwrap());
+        assert_eq!(
+            deserialized.compute_root().unwrap(),
+            subtree.compute_root().unwrap()
+        );
     }
 }
 
@@ -1337,7 +1515,10 @@ fn read_only_while_writer_holds_db() {
     let mut writer_snapshot = db.begin_read().unwrap();
     let writer_root = writer_snapshot.compute_root().unwrap();
 
-    assert_eq!(reader_root, writer_root, "reader should see the same root as writer");
+    assert_eq!(
+        reader_root, writer_root,
+        "reader should see the same root as writer"
+    );
 
     for i in 0u8..10 {
         let mut k = [0u8; 32];
@@ -1374,9 +1555,12 @@ fn reset_to_empty() {
     }
     write.commit().unwrap();
 
-    db.begin_write().unwrap()
-        .insert([0xFFu8; 32], vec![0xFF]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert([0xFFu8; 32], vec![0xFF])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     assert_eq!(db.iter().count(), 2, "should have 2 snapshots");
     assert_ne!(db.begin_read().unwrap().compute_root().unwrap(), empty_root);
@@ -1391,9 +1575,12 @@ fn reset_to_empty() {
     assert_eq!(db.iter().count(), 0, "should have 0 snapshots after reset");
 
     // Should be able to write again after reset
-    db.begin_write().unwrap()
-        .insert([0x42u8; 32], vec![1, 2, 3]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert([0x42u8; 32], vec![1, 2, 3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
     assert_eq!(snapshot.get(&[0x42u8; 32]).unwrap(), Some(vec![1, 2, 3]));
@@ -1434,12 +1621,18 @@ fn hash_index_prove_matches_without_index() {
     assert!(snapshot.load_hash_index().unwrap(), "should load index");
 
     let root_with = snapshot.compute_root().unwrap();
-    assert_eq!(root_with, root_without, "root must match with and without index");
+    assert_eq!(
+        root_with, root_without,
+        "root must match with and without index"
+    );
 
     let proof_with = snapshot.prove(&prove_keys, ProofType::Standard).unwrap();
     let proof_root_with = proof_with.compute_root().unwrap();
     assert_eq!(proof_root_with, proof_root_without, "proof root must match");
-    assert_eq!(proof_root_with, root_with, "proof root must equal tree root");
+    assert_eq!(
+        proof_root_with, root_with,
+        "proof root must equal tree root"
+    );
 
     // Cleanup
     let _ = std::fs::remove_file(&dir);
@@ -1496,43 +1689,61 @@ fn hash_index_rollback_deletes_stale_index() {
     let db = Database::open(db_path).unwrap();
 
     // Snapshot 1
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"a"), vec![1]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"a"), vec![1])
+        .unwrap()
+        .commit()
+        .unwrap();
     let snapshot1 = db.begin_read().unwrap();
 
     // Snapshot 2
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"b"), vec![2]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"b"), vec![2])
+        .unwrap()
+        .commit()
+        .unwrap();
     let mut snapshot2 = db.begin_read().unwrap();
 
     // Build index for snapshot 2
     snapshot2.build_hash_index().unwrap();
 
     // Verify index file exists
-    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let stem = std::path::Path::new(db_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
     let parent = std::path::Path::new(db_path).parent().unwrap();
 
-    let index_exists_before = std::fs::read_dir(parent).unwrap()
+    let index_exists_before = std::fs::read_dir(parent)
+        .unwrap()
         .filter_map(|e| e.ok())
         .any(|e| {
             let name = e.file_name().to_str().unwrap_or("").to_string();
             name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
         });
-    assert!(index_exists_before, "index file should exist before rollback");
+    assert!(
+        index_exists_before,
+        "index file should exist before rollback"
+    );
 
     // Rollback to snapshot 1
     snapshot1.rollback().unwrap();
 
     // Index for snapshot 2 should be deleted
-    let index_exists_after = std::fs::read_dir(parent).unwrap()
+    let index_exists_after = std::fs::read_dir(parent)
+        .unwrap()
         .filter_map(|e| e.ok())
         .any(|e| {
             let name = e.file_name().to_str().unwrap_or("").to_string();
             name.starts_with(&format!("{}.", stem)) && name.ends_with(".hidx.sqlite")
         });
-    assert!(!index_exists_after, "index file should be deleted after rollback");
+    assert!(
+        !index_exists_after,
+        "index file should be deleted after rollback"
+    );
 
     let _ = std::fs::remove_file(&dir);
 }
@@ -1547,23 +1758,34 @@ fn hash_index_reset_deletes_all_indexes() {
     let db = Database::open(db_path).unwrap();
 
     // Create two snapshots with indexes
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"a"), vec![1]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"a"), vec![1])
+        .unwrap()
+        .commit()
+        .unwrap();
     db.begin_read().unwrap().build_hash_index().unwrap();
 
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"b"), vec![2]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"b"), vec![2])
+        .unwrap()
+        .commit()
+        .unwrap();
     db.begin_read().unwrap().build_hash_index().unwrap();
 
     // Reset
     db.reset().unwrap();
 
     // All index files should be gone
-    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let stem = std::path::Path::new(db_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
     let parent = std::path::Path::new(db_path).parent().unwrap();
-    let any_index = std::fs::read_dir(parent).unwrap()
+    let any_index = std::fs::read_dir(parent)
+        .unwrap()
         .filter_map(|e| e.ok())
         .any(|e| {
             let name = e.file_name().to_str().unwrap_or("").to_string();
@@ -1582,11 +1804,16 @@ fn hash_index_prune_keeps_n_most_recent() {
     let db_path = dir.to_str().unwrap();
 
     let db = Database::open(db_path).unwrap();
-    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let stem = std::path::Path::new(db_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
     let parent = std::path::Path::new(db_path).parent().unwrap();
 
     let count_indexes = || -> usize {
-        std::fs::read_dir(parent).unwrap()
+        std::fs::read_dir(parent)
+            .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| {
                 let name = e.file_name().to_str().unwrap_or("").to_string();
@@ -1599,9 +1826,12 @@ fn hash_index_prune_keeps_n_most_recent() {
     for i in 0u8..4 {
         let mut key = [0u8; 32];
         key[0] = i;
-        db.begin_write().unwrap()
-            .insert(key, vec![i]).unwrap()
-            .commit().unwrap();
+        db.begin_write()
+            .unwrap()
+            .insert(key, vec![i])
+            .unwrap()
+            .commit()
+            .unwrap();
         db.begin_read().unwrap().build_hash_index().unwrap();
     }
     assert_eq!(count_indexes(), 4, "should have 4 index files");
@@ -1612,7 +1842,11 @@ fn hash_index_prune_keeps_n_most_recent() {
 
     // Prune to keep 0
     db.prune_hash_indexes(0);
-    assert_eq!(count_indexes(), 0, "should have 0 index files after prune(0)");
+    assert_eq!(
+        count_indexes(),
+        0,
+        "should have 0 index files after prune(0)"
+    );
 
     let _ = std::fs::remove_file(&dir);
 }
@@ -1627,15 +1861,21 @@ fn hash_index_fingerprint_mismatch_after_rollback_and_new_writes() {
     let db = Database::open(db_path).unwrap();
 
     // Snapshot 1
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"x"), vec![1]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"x"), vec![1])
+        .unwrap()
+        .commit()
+        .unwrap();
     let snap1 = db.begin_read().unwrap();
 
     // Snapshot 2
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"y"), vec![2]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"y"), vec![2])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     // Build index for snapshot 2
     db.begin_read().unwrap().build_hash_index().unwrap();
@@ -1644,13 +1884,19 @@ fn hash_index_fingerprint_mismatch_after_rollback_and_new_writes() {
     snap1.rollback().unwrap();
 
     // New writes — new snapshot may reuse the old root offset
-    db.begin_write().unwrap()
-        .insert(Sha256Hasher::hash(b"z"), vec![3]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert(Sha256Hasher::hash(b"z"), vec![3])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     // The old index was already cleaned up by rollback, so load should return false
     let mut snapshot = db.begin_read().unwrap();
-    assert!(!snapshot.load_hash_index().unwrap(), "should not load stale index");
+    assert!(
+        !snapshot.load_hash_index().unwrap(),
+        "should not load stale index"
+    );
 
     let _ = std::fs::remove_file(&dir);
     Database::<Sha256Hasher>::cleanup_hash_indexes(&Some(db_path.to_string()), 0);
@@ -1660,12 +1906,18 @@ fn hash_index_fingerprint_mismatch_after_rollback_and_new_writes() {
 #[test]
 fn hash_index_memory_db_returns_error() {
     let db = Database::memory().unwrap();
-    db.begin_write().unwrap()
-        .insert([1u8; 32], vec![1]).unwrap()
-        .commit().unwrap();
+    db.begin_write()
+        .unwrap()
+        .insert([1u8; 32], vec![1])
+        .unwrap()
+        .commit()
+        .unwrap();
 
     let mut snapshot = db.begin_read().unwrap();
-    assert!(snapshot.build_hash_index().is_err(), "should error for in-memory db");
+    assert!(
+        snapshot.build_hash_index().is_err(),
+        "should error for in-memory db"
+    );
 }
 
 #[cfg(feature = "hash-idx")]
@@ -1721,9 +1973,14 @@ fn hash_index_auto_build_on_commit() {
     let mut snapshot = db.begin_read().unwrap();
 
     // Verify the index file exists
-    let stem = std::path::Path::new(db_path).file_stem().unwrap().to_str().unwrap();
+    let stem = std::path::Path::new(db_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
     let parent = std::path::Path::new(db_path).parent().unwrap();
-    let has_index = std::fs::read_dir(parent).unwrap()
+    let has_index = std::fs::read_dir(parent)
+        .unwrap()
         .filter_map(|e| e.ok())
         .any(|e| {
             let name = e.file_name().to_str().unwrap_or("").to_string();
@@ -1732,7 +1989,9 @@ fn hash_index_auto_build_on_commit() {
     assert!(has_index, "auto-built index file should exist after commit");
 
     // Verify prove works and roots match
-    let keys: Vec<_> = (0u32..3).map(|i| Sha256Hasher::hash(&i.to_le_bytes())).collect();
+    let keys: Vec<_> = (0u32..3)
+        .map(|i| Sha256Hasher::hash(&i.to_le_bytes()))
+        .collect();
     let root = snapshot.compute_root().unwrap();
     let proof = snapshot.prove(&keys, ProofType::Standard).unwrap();
     assert_eq!(proof.compute_root().unwrap(), root);

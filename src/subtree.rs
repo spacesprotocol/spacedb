@@ -1,11 +1,14 @@
 use crate::{
     path::{BitLength, Direction, Path, PathSegment, PathSegmentInner, PathUtils},
-    Result, Hash, NodeHasher, VerifyError
+    Hash, NodeHasher, Result, VerifyError,
 };
 
 use alloc::{boxed::Box, vec, vec::Vec};
+use borsh::{
+    io::{Read, Write},
+    BorshDeserialize, BorshSerialize,
+};
 use core::marker::PhantomData;
-use borsh::{BorshDeserialize, BorshSerialize, io::{Read, Write}};
 
 #[derive(Clone, Debug)]
 pub struct SubTree<H: NodeHasher> {
@@ -13,7 +16,7 @@ pub struct SubTree<H: NodeHasher> {
     pub _marker: PhantomData<H>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub enum SubTreeNode {
     Leaf {
         key: Path<Hash>,
@@ -25,6 +28,7 @@ pub enum SubTreeNode {
         right: Box<SubTreeNode>,
     },
     Hash(Hash),
+    #[default]
     None,
 }
 
@@ -43,11 +47,15 @@ impl<H: NodeHasher> SubTree<H> {
     }
 
     pub fn to_vec(&self) -> Result<Vec<u8>> {
-        borsh::to_vec(self).map_err(|_| crate::Error::Encode(crate::EncodeError::InvalidData("serialization failed")))
+        borsh::to_vec(self).map_err(|_| {
+            crate::Error::Encode(crate::EncodeError::InvalidData("serialization failed"))
+        })
     }
 
     pub fn from_slice(buf: &[u8]) -> Result<Self> {
-        borsh::from_slice(buf).map_err(|_| crate::Error::Encode(crate::EncodeError::InvalidData("deserialization failed")))
+        borsh::from_slice(buf).map_err(|_| {
+            crate::Error::Encode(crate::EncodeError::InvalidData("deserialization failed"))
+        })
     }
 
     pub fn compute_root(&self) -> Result<Hash> {
@@ -64,10 +72,7 @@ impl<H: NodeHasher> SubTree<H> {
 
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
-        match self.root {
-            SubTreeNode::None => true,
-            _ => false,
-        }
+        matches!(self.root, SubTreeNode::None)
     }
 
     /// Inserts a key-value pair. Returns error if key already exists.
@@ -94,7 +99,10 @@ impl<H: NodeHasher> SubTree<H> {
         let mut depth = 0;
         loop {
             match node {
-                SubTreeNode::Leaf { key: node_key, value_or_hash: existing } => {
+                SubTreeNode::Leaf {
+                    key: node_key,
+                    value_or_hash: existing,
+                } => {
                     // Same key - replace value
                     if key.0 == node_key.0 {
                         let old = core::mem::replace(existing, value_or_hash);
@@ -104,7 +112,7 @@ impl<H: NodeHasher> SubTree<H> {
                     //  A split point must exist: compress common path into an internal node
                     let point = node_key.split_point(0, key).unwrap();
                     let prefix = PathSegment::from_path(*node_key, depth, point);
-                    let depth = depth + prefix.bit_len() as usize;
+                    let depth = depth + prefix.bit_len();
                     let direction = key.direction(depth);
                     let current_node = core::mem::take(node);
                     let new_node = SubTreeNode::Leaf { key, value_or_hash };
@@ -126,7 +134,7 @@ impl<H: NodeHasher> SubTree<H> {
                 } => {
                     let point = key.split_point(depth, *prefix);
                     if point.is_none() {
-                        depth = depth + prefix.bit_len() as usize;
+                        depth += prefix.bit_len();
                         match key.direction(depth) {
                             Direction::Right => node = right,
                             Direction::Left => node = left,
@@ -147,7 +155,7 @@ impl<H: NodeHasher> SubTree<H> {
                         right: core::mem::take(right),
                     };
 
-                    depth = depth + parent_prefix.bit_len();
+                    depth += parent_prefix.bit_len();
 
                     let new_node = SubTreeNode::Leaf { key, value_or_hash };
                     let (lefty, righty) = match key.direction(depth) {
@@ -193,7 +201,7 @@ impl<H: NodeHasher> SubTree<H> {
                     if key.split_point(depth, *prefix).is_some() {
                         return Ok(false);
                     }
-                    depth = depth + prefix.bit_len() as usize;
+                    depth += prefix.bit_len();
                     match key.direction(depth) {
                         Direction::Left => node = left,
                         Direction::Right => node = right,
@@ -220,13 +228,17 @@ impl<H: NodeHasher> SubTree<H> {
 
     fn delete_node(node: SubTreeNode, key: &Path<&Hash>, depth: usize) -> Result<SubTreeNode> {
         match node {
-            SubTreeNode::Leaf { key : node_key, .. } => {
+            SubTreeNode::Leaf { key: node_key, .. } => {
                 if node_key.0 != *key.0 {
                     return Err(VerifyError::KeyNotFound.into());
                 }
                 Ok(SubTreeNode::None)
             }
-            SubTreeNode::Internal { prefix, left, right } => {
+            SubTreeNode::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
                     Direction::Right => {
@@ -235,11 +247,9 @@ impl<H: NodeHasher> SubTree<H> {
                             SubTreeNode::None => {
                                 // Right subtree was deleted, move left subtree up
                                 Ok(Self::lift_node(prefix, *left, Direction::Left)?)
-                            },
-                            SubTreeNode::Hash(_) => {
-                                return Err(VerifyError::IncompleteProof.into())
-                            },
-                            other  => {
+                            }
+                            SubTreeNode::Hash(_) => Err(VerifyError::IncompleteProof.into()),
+                            other => {
                                 // Right node was updated
                                 Ok(SubTreeNode::Internal {
                                     prefix,
@@ -255,11 +265,9 @@ impl<H: NodeHasher> SubTree<H> {
                             SubTreeNode::None => {
                                 // left subtree was deleted, move right subtree up
                                 Ok(Self::lift_node(prefix, *right, Direction::Right)?)
-                            },
-                            SubTreeNode::Hash(_) => {
-                                return Err(VerifyError::IncompleteProof.into())
-                            },
-                            other  => {
+                            }
+                            SubTreeNode::Hash(_) => Err(VerifyError::IncompleteProof.into()),
+                            other => {
                                 // left node was updated
                                 Ok(SubTreeNode::Internal {
                                     prefix,
@@ -276,17 +284,23 @@ impl<H: NodeHasher> SubTree<H> {
         }
     }
 
-    fn lift_node(mut parent_prefix: PathSegment<PathSegmentInner>, node: SubTreeNode, direction: Direction) -> Result<SubTreeNode> {
+    fn lift_node(
+        mut parent_prefix: PathSegment<PathSegmentInner>,
+        node: SubTreeNode,
+        direction: Direction,
+    ) -> Result<SubTreeNode> {
         match node {
-            SubTreeNode::Leaf { .. } => {
-                Ok(node.clone())
-            }
-            SubTreeNode::Internal { prefix, left, right } => {
+            SubTreeNode::Leaf { .. } => Ok(node.clone()),
+            SubTreeNode::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 match direction {
                     Direction::Left => parent_prefix.extend_from_byte(0, 1),
-                    Direction::Right => parent_prefix.extend_from_byte(0b1000_0000, 1)
+                    Direction::Right => parent_prefix.extend_from_byte(0b1000_0000, 1),
                 }
-                parent_prefix.extend(prefix.clone());
+                parent_prefix.extend(prefix);
 
                 Ok(SubTreeNode::Internal {
                     prefix: parent_prefix,
@@ -294,12 +308,8 @@ impl<H: NodeHasher> SubTree<H> {
                     right,
                 })
             }
-            SubTreeNode::Hash(_) => {
-                 Err(VerifyError::IncompleteProof.into())
-            }
-            SubTreeNode::None => {
-                 Err(VerifyError::IncompleteProof.into())
-            }
+            SubTreeNode::Hash(_) => Err(VerifyError::IncompleteProof.into()),
+            SubTreeNode::None => Err(VerifyError::IncompleteProof.into()),
         }
     }
 
@@ -321,10 +331,8 @@ impl<H: NodeHasher> SubTree<H> {
                 let right_hash = Self::hash_node(right)?;
                 Ok(H::hash_internal(prefix.as_bytes(), &left_hash, &right_hash))
             }
-            SubTreeNode::Hash(hash) => Ok(hash.clone()),
-            SubTreeNode::None => {
-                return Err(VerifyError::IncompleteProof.into())
-            }
+            SubTreeNode::Hash(hash) => Ok(*hash),
+            SubTreeNode::None => Err(VerifyError::IncompleteProof.into()),
         }
     }
 
@@ -371,7 +379,7 @@ impl<H: NodeHasher> SubTree<H> {
             return Ok(SubTree::<H>::empty());
         }
 
-        let mut key_paths: Vec<Path<&Hash>> = keys.iter().map(|k| Path(k)).collect();
+        let mut key_paths: Vec<Path<&Hash>> = keys.iter().map(Path).collect();
         key_paths.sort_by(|a, b| a.0.cmp(b.0));
 
         let info = Self::prove_node(&self.root, key_paths.as_slice(), 0, proof_type)?;
@@ -388,7 +396,10 @@ impl<H: NodeHasher> SubTree<H> {
         proof_type: ProofType,
     ) -> Result<ProveNodeInfo> {
         match node {
-            SubTreeNode::Leaf { key: node_key, value_or_hash } => {
+            SubTreeNode::Leaf {
+                key: node_key,
+                value_or_hash,
+            } => {
                 let include_value = keys.iter().any(|k| *k.0 == node_key.0);
                 let new_value_or_hash = match value_or_hash {
                     ValueOrHash::Value(value) => {
@@ -399,17 +410,21 @@ impl<H: NodeHasher> SubTree<H> {
                         }
                     }
                     // If already a hash, keep it as is
-                    ValueOrHash::Hash(hash) => ValueOrHash::Hash(hash.clone()),
+                    ValueOrHash::Hash(hash) => ValueOrHash::Hash(*hash),
                 };
                 Ok(ProveNodeInfo {
                     node: SubTreeNode::Leaf {
-                        key: node_key.clone(),
+                        key: *node_key,
                         value_or_hash: new_value_or_hash,
                     },
                     value_node: include_value,
                 })
             }
-            SubTreeNode::Internal { prefix, left, right } => {
+            SubTreeNode::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 // Exclude keys that don't match this prefix
                 let end = keys.partition_point(|key| key.split_point(depth, *prefix).is_none());
                 let keys = &keys[..end];
@@ -432,13 +447,13 @@ impl<H: NodeHasher> SubTree<H> {
 
                 // For extended proofs, include sibling leaf structure (with hashed values)
                 if proof_type == ProofType::Extended {
-                    if left_info.is_none() && right_info.as_ref().map_or(false, |r| r.value_node) {
+                    if left_info.is_none() && right_info.as_ref().is_some_and(|r| r.value_node) {
                         left_info = Some(ProveNodeInfo {
                             node: Self::hash_node_extended(left)?,
                             value_node: false,
                         });
                     }
-                    if right_info.is_none() && left_info.as_ref().map_or(false, |l| l.value_node) {
+                    if right_info.is_none() && left_info.as_ref().is_some_and(|l| l.value_node) {
                         right_info = Some(ProveNodeInfo {
                             node: Self::hash_node_extended(right)?,
                             value_node: false,
@@ -467,7 +482,7 @@ impl<H: NodeHasher> SubTree<H> {
 
                 Ok(ProveNodeInfo {
                     node: SubTreeNode::Internal {
-                        prefix: prefix.clone(),
+                        prefix: *prefix,
                         left: Box::new(left_info.unwrap().node),
                         right: Box::new(right_info.unwrap().node),
                     },
@@ -485,23 +500,27 @@ impl<H: NodeHasher> SubTree<H> {
             SubTreeNode::Leaf { key, value_or_hash } => {
                 let hash = match value_or_hash {
                     ValueOrHash::Value(value) => H::hash(value),
-                    ValueOrHash::Hash(h) => h.clone(),
+                    ValueOrHash::Hash(h) => *h,
                 };
                 Ok(SubTreeNode::Leaf {
-                    key: key.clone(),
+                    key: *key,
                     value_or_hash: ValueOrHash::Hash(hash),
                 })
             }
-            SubTreeNode::Internal { prefix, left, right } => {
+            SubTreeNode::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 let left_hash = Self::hash_node(left)?;
                 let right_hash = Self::hash_node(right)?;
                 Ok(SubTreeNode::Internal {
-                    prefix: prefix.clone(),
+                    prefix: *prefix,
                     left: Box::new(SubTreeNode::Hash(left_hash)),
                     right: Box::new(SubTreeNode::Hash(right_hash)),
                 })
             }
-            SubTreeNode::Hash(h) => Ok(SubTreeNode::Hash(h.clone())),
+            SubTreeNode::Hash(h) => Ok(SubTreeNode::Hash(*h)),
             SubTreeNode::None => Err(VerifyError::IncompleteProof.into()),
         }
     }
@@ -548,15 +567,19 @@ impl<H: NodeHasher> SubTree<H> {
             SubTreeNode::Leaf { key, .. } => {
                 // Check if leaf matches prefix
                 let key_path = Path(&key.0);
-                for i in depth..prefix.len() {
+                for (i, &want) in prefix.iter().enumerate().skip(depth) {
                     let key_bit = matches!(key_path.direction(i), Direction::Right);
-                    if key_bit != prefix[i] {
+                    if key_bit != want {
                         return None;
                     }
                 }
                 Self::hash_node(node).ok()
             }
-            SubTreeNode::Internal { prefix: seg, left, right } => {
+            SubTreeNode::Internal {
+                prefix: seg,
+                left,
+                right,
+            } => {
                 let seg_len = seg.bit_len();
                 let mut current_depth = depth;
 
@@ -598,13 +621,13 @@ impl<H: NodeHasher> SubTree<H> {
         // First, navigate to the prefix
         if prefix_idx < prefix.len() {
             match node {
-                SubTreeNode::None | SubTreeNode::Hash(_) => return,
+                SubTreeNode::None | SubTreeNode::Hash(_) => (),
                 SubTreeNode::Leaf { key, .. } => {
                     // Check if leaf matches remaining prefix
                     let key_path = Path(&key.0);
-                    for i in prefix_idx..prefix.len() {
+                    for (i, &want) in prefix.iter().enumerate().skip(prefix_idx) {
                         let key_bit = matches!(key_path.direction(i), Direction::Right);
-                        if key_bit != prefix[i] {
+                        if key_bit != want {
                             return;
                         }
                     }
@@ -620,7 +643,11 @@ impl<H: NodeHasher> SubTree<H> {
                         result[bucket] = Some(hash);
                     }
                 }
-                SubTreeNode::Internal { prefix: seg, left, right } => {
+                SubTreeNode::Internal {
+                    prefix: seg,
+                    left,
+                    right,
+                } => {
                     let seg_len = seg.bit_len();
                     let mut current_prefix_idx = prefix_idx;
 
@@ -630,8 +657,13 @@ impl<H: NodeHasher> SubTree<H> {
                             // Prefix consumed within segment - collect from here
                             let remaining_seg_bits = seg_len - i;
                             Self::collect_from_segment_point(
-                                node, seg, i, remaining_seg_bits,
-                                bucket_bits, target_bits, result
+                                node,
+                                seg,
+                                i,
+                                remaining_seg_bits,
+                                bucket_bits,
+                                target_bits,
+                                result,
                             );
                             return;
                         }
@@ -646,16 +678,30 @@ impl<H: NodeHasher> SubTree<H> {
                     if current_prefix_idx >= prefix.len() {
                         // Prefix exactly consumed - collect buckets from children
                         Self::collect_bucket_hashes(left, bucket_bits << 1, 0, target_bits, result);
-                        Self::collect_bucket_hashes(right, (bucket_bits << 1) | 1, 0, target_bits, result);
+                        Self::collect_bucket_hashes(
+                            right,
+                            (bucket_bits << 1) | 1,
+                            0,
+                            target_bits,
+                            result,
+                        );
                     } else if prefix[current_prefix_idx] {
                         Self::collect_bucket_hashes_at_prefix(
-                            right, prefix, current_prefix_idx + 1,
-                            bucket_bits, target_bits, result
+                            right,
+                            prefix,
+                            current_prefix_idx + 1,
+                            bucket_bits,
+                            target_bits,
+                            result,
                         );
                     } else {
                         Self::collect_bucket_hashes_at_prefix(
-                            left, prefix, current_prefix_idx + 1,
-                            bucket_bits, target_bits, result
+                            left,
+                            prefix,
+                            current_prefix_idx + 1,
+                            bucket_bits,
+                            target_bits,
+                            result,
                         );
                     }
                 }
@@ -700,7 +746,13 @@ impl<H: NodeHasher> SubTree<H> {
             if let SubTreeNode::Internal { left, right, .. } = node {
                 let remaining_bits = target_bits - bits_collected;
                 Self::collect_bucket_hashes(left, current_bucket << 1, 0, remaining_bits, result);
-                Self::collect_bucket_hashes(right, (current_bucket << 1) | 1, 0, remaining_bits, result);
+                Self::collect_bucket_hashes(
+                    right,
+                    (current_bucket << 1) | 1,
+                    0,
+                    remaining_bits,
+                    result,
+                );
             }
         }
     }
@@ -738,7 +790,11 @@ impl<H: NodeHasher> SubTree<H> {
                     result[bucket] = Some(hash);
                 }
             }
-            SubTreeNode::Internal { prefix, left, right } => {
+            SubTreeNode::Internal {
+                prefix,
+                left,
+                right,
+            } => {
                 let seg_len = prefix.bit_len();
                 let mut current_prefix = prefix_bits;
                 let mut current_depth = depth;
@@ -813,9 +869,9 @@ impl<H: NodeHasher> SubTree<H> {
             SubTreeNode::Leaf { key, .. } => {
                 // Check if leaf's key matches the prefix
                 let key_path = Path(&key.0);
-                for i in depth..prefix.len() {
+                for (i, &want) in prefix.iter().enumerate().skip(depth) {
                     let key_bit = matches!(key_path.direction(i), Direction::Right);
-                    if key_bit != prefix[i] {
+                    if key_bit != want {
                         // Leaf doesn't match prefix - hash it
                         let hash = Self::hash_node(node)?;
                         return Ok(SubTreeNode::Hash(hash));
@@ -825,7 +881,11 @@ impl<H: NodeHasher> SubTree<H> {
                 Ok(node.clone())
             }
 
-            SubTreeNode::Internal { prefix: seg, left, right } => {
+            SubTreeNode::Internal {
+                prefix: seg,
+                left,
+                right,
+            } => {
                 let seg_len = seg.bit_len();
                 let mut current_depth = depth;
 
@@ -857,7 +917,7 @@ impl<H: NodeHasher> SubTree<H> {
                     let left_hash = Self::hash_node(left)?;
                     let right_node = Self::extract_prefix_node(right, prefix, current_depth + 1)?;
                     Ok(SubTreeNode::Internal {
-                        prefix: seg.clone(),
+                        prefix: *seg,
                         left: Box::new(SubTreeNode::Hash(left_hash)),
                         right: Box::new(right_node),
                     })
@@ -866,7 +926,7 @@ impl<H: NodeHasher> SubTree<H> {
                     let right_hash = Self::hash_node(right)?;
                     let left_node = Self::extract_prefix_node(left, prefix, current_depth + 1)?;
                     Ok(SubTreeNode::Internal {
-                        prefix: seg.clone(),
+                        prefix: *seg,
                         left: Box::new(left_node),
                         right: Box::new(SubTreeNode::Hash(right_hash)),
                     })
@@ -919,8 +979,14 @@ impl<H: NodeHasher> SubTree<H> {
 
             // Two leaves
             (
-                SubTreeNode::Leaf { key: k1, value_or_hash: v1 },
-                SubTreeNode::Leaf { key: k2, value_or_hash: v2 },
+                SubTreeNode::Leaf {
+                    key: k1,
+                    value_or_hash: v1,
+                },
+                SubTreeNode::Leaf {
+                    key: k2,
+                    value_or_hash: v2,
+                },
             ) => {
                 if k1.0 == k2.0 {
                     // Same key - prefer value over hash
@@ -953,8 +1019,16 @@ impl<H: NodeHasher> SubTree<H> {
 
             // Two internal nodes
             (
-                SubTreeNode::Internal { prefix: p1, left: l1, right: r1 },
-                SubTreeNode::Internal { prefix: p2, left: l2, right: r2 },
+                SubTreeNode::Internal {
+                    prefix: p1,
+                    left: l1,
+                    right: r1,
+                },
+                SubTreeNode::Internal {
+                    prefix: p2,
+                    left: l2,
+                    right: r2,
+                },
             ) => {
                 // Prefixes must match for valid merge
                 if p1.0 != p2.0 {
@@ -996,9 +1070,9 @@ impl<H: NodeHasher> SubTree<H> {
             SubTreeNode::Leaf { key, value_or_hash } => {
                 // Check if leaf matches prefix
                 let key_path = Path(&key.0);
-                for i in depth..prefix.len() {
+                for (i, &want) in prefix.iter().enumerate().skip(depth) {
                     let key_bit = matches!(key_path.direction(i), Direction::Right);
-                    if key_bit != prefix[i] {
+                    if key_bit != want {
                         return; // Doesn't match
                     }
                 }
@@ -1010,7 +1084,11 @@ impl<H: NodeHasher> SubTree<H> {
                 result.push((key.0, value_hash));
             }
 
-            SubTreeNode::Internal { prefix: seg, left, right } => {
+            SubTreeNode::Internal {
+                prefix: seg,
+                left,
+                right,
+            } => {
                 let seg_len = seg.bit_len();
                 let mut current_depth = depth;
 
@@ -1138,10 +1216,15 @@ impl<'a, H: NodeHasher> DiffSession<'a, H> {
         let request = self.current_request.take();
 
         match (request, response) {
-            (Some(DiffRequest::BucketHashes { prefix, bits }), DiffResponse::BucketHashes(remote_hashes)) => {
+            (
+                Some(DiffRequest::BucketHashes { prefix, bits }),
+                DiffResponse::BucketHashes(remote_hashes),
+            ) => {
                 let local_hashes = self.local.bucket_hashes_at_prefix(&prefix, bits);
 
-                for (i, (local_h, remote_h)) in local_hashes.iter().zip(remote_hashes.iter()).enumerate() {
+                for (i, (local_h, remote_h)) in
+                    local_hashes.iter().zip(remote_hashes.iter()).enumerate()
+                {
                     if local_h != remote_h {
                         let new_prefix = extend_prefix(&prefix, i, bits);
                         if new_prefix.len() >= self.target_depth {
@@ -1207,12 +1290,6 @@ impl<H: NodeHasher> BorshDeserialize for SubTree<H> {
     }
 }
 
-impl Default for SubTreeNode {
-    fn default() -> Self {
-        SubTreeNode::None
-    }
-}
-
 pub struct SubtreeIter<'a> {
     stack: Vec<(&'a SubTreeNode, usize)>,
 }
@@ -1222,10 +1299,7 @@ impl<'a> Iterator for SubtreeIter<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            let (node, depth) = match self.stack.pop() {
-                Some(x) => x,
-                None => return None,
-            };
+            let (node, depth) = self.stack.pop()?;
 
             match node {
                 SubTreeNode::Leaf { key, value_or_hash } => {
@@ -1305,7 +1379,13 @@ impl<'a> Iterator for SubtreeIterMut<'a> {
 
 impl SubTreeNode {
     pub fn is_value_leaf(&self) -> bool {
-        matches!(self, SubTreeNode::Leaf {  value_or_hash: ValueOrHash::Value(_), ..})
+        matches!(
+            self,
+            SubTreeNode::Leaf {
+                value_or_hash: ValueOrHash::Value(_),
+                ..
+            }
+        )
     }
 }
 

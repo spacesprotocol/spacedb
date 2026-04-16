@@ -188,7 +188,7 @@ impl<T: BitLength + AsRef<[u8]>> PathUtils for T {
     fn split_point<S: BitLength + PathUtils>(&self, start: usize, b: S) -> Option<usize> {
         let max_bit_len = core::cmp::min(self.bit_len(), b.bit_len());
         let (src_start_byte, src_start_bit, seg_end_byte) =
-            (start / 8, start % 8, (max_bit_len + 7) / 8);
+            (start / 8, start % 8, max_bit_len.div_ceil(8));
         let mut count = 0;
 
         // Aligned on byte boundary
@@ -223,9 +223,9 @@ impl<T: BitLength + AsRef<[u8]>> PathUtils for T {
 
         let count = core::cmp::min(count as usize, max_bit_len);
         if count == max_bit_len {
-            return None;
+            None
         } else {
-            return Some(count);
+            Some(count)
         }
     }
 }
@@ -275,12 +275,12 @@ impl<T: AsRef<[u8]>> BitLength for Path<T> {
 
     #[inline(always)]
     fn inner(&self) -> &[u8] {
-        &self.0.as_ref()
+        self.0.as_ref()
     }
 
     #[inline(always)]
     fn as_bytes(&self) -> &[u8] {
-        &self.0.as_ref()
+        self.0.as_ref()
     }
 }
 
@@ -297,7 +297,7 @@ impl<T: AsRef<[u8]>> BitLength for PathSegment<T> {
 
     #[inline(always)]
     fn as_bytes(&self) -> &[u8] {
-        let byte_len = (self.bit_len() + 7) / 8;
+        let byte_len = self.bit_len().div_ceil(8);
         &self.0.as_ref()[..(byte_len + 1)]
     }
 }
@@ -322,11 +322,10 @@ pub trait BitLength {
     fn as_bytes(&self) -> &[u8];
 }
 
-
 #[cfg(test)]
 mod tests {
-    use core::fmt::Display;
     use crate::path::{BitLength, Direction, PathSegment, PathUtils};
+    use core::fmt::Display;
 
     impl<T: AsRef<[u8]>> Display for PathSegment<T> {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -343,10 +342,10 @@ mod tests {
 
     #[test]
     fn test_extend() {
-        let mut parent = PathSegment([0u8;33]);
+        let mut parent = PathSegment([0u8; 33]);
         parent.set_len(5);
 
-        let mut child = PathSegment([0u8;33]);
+        let mut child = PathSegment([0u8; 33]);
         child.set_len(10);
         child.0[1] = 0b1111_1010;
 
@@ -356,13 +355,13 @@ mod tests {
 
     #[test]
     fn test_extend_from_byte() {
-        let mut segment = PathSegment([0u8;33]);
+        let mut segment = PathSegment([0u8; 33]);
         segment.set_len(2);
 
         let inner = segment.as_mut_inner();
         inner[0] = 0b1100_0000;
 
-        segment.extend_from_byte(0b1000_1000,3);
+        segment.extend_from_byte(0b1000_1000, 3);
         assert_eq!(segment.to_string(), "11100");
 
         segment.extend_from_byte(0b1111_1111, 8);
@@ -378,7 +377,10 @@ mod tests {
         assert_eq!(segment.to_string(), "111001111111100111111110000");
 
         segment.set_len(segment.bit_len() + 2);
-        assert_eq!(segment.to_string(),  "11100111111110011111111000000",
-                   "trailing bits must be cleared");
+        assert_eq!(
+            segment.to_string(),
+            "11100111111110011111111000000",
+            "trailing bits must be cleared"
+        );
     }
 }

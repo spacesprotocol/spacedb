@@ -61,7 +61,7 @@ pub enum VerifyError {
 #[derive(Debug)]
 pub enum EncodeError {
     BufferTooSmall,
-    InvalidData(&'static str)
+    InvalidData(&'static str),
 }
 
 impl core::fmt::Display for Error {
@@ -70,7 +70,7 @@ impl core::fmt::Display for Error {
             #[cfg(feature = "std")]
             Error::IO(err) => write!(f, "IO error: {}", err),
             Error::Verify(err) => write!(f, "Verification error: {}", err),
-            Error::Encode(err) => write!(f, "Encode error: {}", err)
+            Error::Encode(err) => write!(f, "Encode error: {}", err),
         }
     }
 }
@@ -95,6 +95,12 @@ impl core::fmt::Display for EncodeError {
             EncodeError::BufferTooSmall => write!(f, "Buffer too small"),
             EncodeError::InvalidData(str) => write!(f, "Invalid data: {}", *str),
         }
+    }
+}
+
+impl<Hasher: NodeHasher> Default for Configuration<Hasher> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -146,8 +152,8 @@ impl NodeHasher for Sha256Hasher {
     fn hash_leaf(key: &[u8], value_hash: &[u8]) -> Hash {
         let mut hasher = Sha256::new();
         hasher.update([LEAF_TAG]);
-        hasher.update(&key);
-        hasher.update(&value_hash);
+        hasher.update(key);
+        hasher.update(value_hash);
         hasher.finalize().as_slice().try_into().unwrap()
     }
 

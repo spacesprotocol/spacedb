@@ -68,7 +68,7 @@ impl Node {
 
     #[inline]
     pub fn mem_size(&self) -> usize {
-        let base_size = std::mem::size_of_val(&self);
+        let base_size = std::mem::size_of_val(self);
         let inner_size = std::mem::size_of_val(&self.inner)
             + match &self.inner {
                 Some(NodeInner::Leaf { value, .. }) => value.capacity(),
@@ -132,7 +132,7 @@ impl<Context> Decode<Context> for NodeInner {
     }
 }
 
-impl<'a> Encode for &'a mut NodeInner {
+impl Encode for &mut NodeInner {
     fn encode<E: Encoder>(&self, encoder: &mut E) -> Result<(), EncodeError> {
         match self {
             NodeInner::Leaf { key, value } => {
