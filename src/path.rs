@@ -186,7 +186,12 @@ impl<T: BitLength + AsRef<[u8]>> PathUtils for T {
     }
 
     fn split_point<S: BitLength + PathUtils>(&self, start: usize, b: S) -> Option<usize> {
-        let max_bit_len = core::cmp::min(self.bit_len(), b.bit_len());
+        assert!(self.bit_len() >= start, "start must be within self");
+        // Cap by self's remaining bits past `start`, not by self's full
+        // length. Otherwise a `b` longer than the tail of self causes the
+        // comparison to overrun into self's padding and report a spurious
+        // split point.
+        let max_bit_len = core::cmp::min(self.bit_len() - start, b.bit_len());
         let (src_start_byte, src_start_bit, seg_end_byte) =
             (start / 8, start % 8, max_bit_len.div_ceil(8));
         let mut count = 0;
@@ -351,6 +356,35 @@ mod tests {
 
         parent.extend(child);
         assert_eq!(parent.to_string(), "000001111101000");
+    }
+
+    #[test]
+    fn split_point_does_not_overrun_self() {
+        use crate::path::Path;
+
+        // self is a 256-bit key, all ones.
+        let key = Path([0xFFu8; 32]);
+
+        // A malformed segment claims bit_len=100, but only 56 bits past
+        // start=200 remain in self. Past those 56 bits, comparison should
+        // stop — anything beyond is outside self's data.
+        //
+        // Make the segment's first 56 bits match self's remaining 56 bits
+        // (all 0xFF). The remaining 44 bits of the segment are zero.
+        let mut malicious = PathSegment([0u8; 33]);
+        malicious.set_len(100);
+        for byte in malicious.0[1..=7].iter_mut() {
+            *byte = 0xFF;
+        }
+
+        // Correct behaviour: compare 56 bits, all match -> no split point.
+        // Buggy behaviour: cap is 100 bits, comparison runs out of self at
+        // bit 56, returns Some(56) reporting a spurious divergence.
+        assert_eq!(
+            key.split_point(200, malicious),
+            None,
+            "split_point must not report a divergence beyond self's length"
+        );
     }
 
     #[test]
