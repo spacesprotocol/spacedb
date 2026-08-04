@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4](https://github.com/spacesprotocol/spacedb/compare/v0.1.3...v0.1.4) - 2026-08-04
+
+### Bug Fixes
+
+- *(subtree)* Honest error semantics for delete and merge
+- *(path)* Out-of-bounds read in unaligned split_point comparison
+- *(subtree)* Trim non-subtree keys from both ends in SubTree::prove
+
 ## [0.1.3](https://github.com/spacesprotocol/spacedb/compare/v0.1.2...v0.1.3) - 2026-08-03
 
 ### Bug Fixes
