@@ -239,6 +239,12 @@ impl<H: NodeHasher> SubTree<H> {
                 left,
                 right,
             } => {
+                // A key diverging from the prefix is provably absent —
+                // descending anyway would surface IncompleteProof when the
+                // walk hits a hash node.
+                if key.split_point(depth, prefix).is_some() {
+                    return Err(VerifyError::KeyNotFound.into());
+                }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
                     Direction::Right => {
@@ -963,8 +969,12 @@ impl<H: NodeHasher> SubTree<H> {
 
     fn merge_nodes(a: SubTreeNode, b: SubTreeNode, depth: usize) -> Result<SubTreeNode> {
         match (a, b) {
-            // If either is None, return the other
-            (SubTreeNode::None, other) | (other, SubTreeNode::None) => Ok(other),
+            // A well-formed proof never contains interior None nodes (empty
+            // roots are handled in merge()). Absorbing one here would launder
+            // an unverifiable proof into a valid-looking one.
+            (SubTreeNode::None, _) | (_, SubTreeNode::None) => {
+                Err(VerifyError::IncompleteProof.into())
+            }
 
             // Two hash nodes - if they're equal, keep one; otherwise can't merge
             (SubTreeNode::Hash(h1), SubTreeNode::Hash(h2)) => {
