@@ -212,8 +212,10 @@ impl<T: BitLength + AsRef<[u8]>> PathUtils for T {
             for (i, b_byte) in b.iter().enumerate() {
                 // Remove bits we don't care about at the start by shifiting
                 let mut a_byte = a[i] << src_start_bit;
-                // We made room for some bits from the next byte
-                if i < a.len() {
+                // We made room for some bits from the next byte. Past the last
+                // byte the low bits stay zero; any mismatch they cause lies
+                // beyond max_bit_len and is clamped below.
+                if i + 1 < a.len() {
                     a_byte |= a[i + 1] >> (8 - src_start_bit);
                 }
 
@@ -384,6 +386,23 @@ mod tests {
             key.split_point(200, malicious),
             None,
             "split_point must not report a divergence beyond self's length"
+        );
+    }
+
+    #[test]
+    fn split_point_unaligned_reaching_last_byte_does_not_panic() {
+        use crate::path::Path;
+
+        // A 254-bit segment compared from start=1 scans every byte of the
+        // 32-byte key; the last iteration used to read one byte past the end.
+        let key = Path([0u8; 32]);
+        let mut segment = PathSegment([0u8; 33]);
+        segment.set_len(254);
+
+        assert_eq!(
+            key.split_point(1, segment),
+            None,
+            "matching unaligned segment reaching self's last byte"
         );
     }
 
