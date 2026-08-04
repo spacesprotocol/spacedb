@@ -84,3 +84,35 @@ fn proving_more_keys_does_not_reduce_capability() {
         failed_at.unwrap()
     );
 }
+
+/// `SubTree::prove` mirrors the tree's prove and had the same one-sided key
+/// trimming: chaining a proof from a full subtree must also support inserting
+/// the proven keys.
+#[test]
+fn chained_subtree_proof_supports_inserting_its_own_keys() {
+    for existing in [2usize, 102, 1000] {
+        let db = tree_with(existing);
+
+        // Prove every existing key so the subtree carries the full tree.
+        let all: Vec<Hash> = (0..existing).map(|i| key("existing", i)).collect();
+        let mut snapshot = db.begin_read().expect("read tx");
+        let full = snapshot
+            .prove(&all, ProofType::Standard)
+            .expect("prove existing keys");
+
+        let keys: Vec<Hash> = (0..900).map(|i| key("new", i)).collect();
+        let mut proof = full
+            .prove(&keys, spacedb::subtree::ProofType::Standard)
+            .expect("subtree prove should succeed");
+
+        for (i, k) in keys.iter().enumerate() {
+            assert!(
+                proof.insert(*k, ValueOrHash::Hash(key("val", i))).is_ok(),
+                "tree with {} existing keys: chained proof over 900 absent \
+                 keys cannot insert entry {}",
+                existing,
+                i
+            );
+        }
+    }
+}

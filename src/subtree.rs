@@ -239,6 +239,12 @@ impl<H: NodeHasher> SubTree<H> {
                 left,
                 right,
             } => {
+                // A key diverging from the prefix is provably absent —
+                // descending anyway would surface IncompleteProof when the
+                // walk hits a hash node.
+                if key.split_point(depth, prefix).is_some() {
+                    return Err(VerifyError::KeyNotFound.into());
+                }
                 let depth = depth + prefix.bit_len();
                 match key.direction(depth) {
                     Direction::Right => {
@@ -425,9 +431,18 @@ impl<H: NodeHasher> SubTree<H> {
                 left,
                 right,
             } => {
-                // Exclude keys that don't match this prefix
-                let end = keys.partition_point(|key| key.split_point(depth, *prefix).is_none());
-                let keys = &keys[..end];
+                // Exclude keys that don't match this prefix. Sorted keys that
+                // diverge below the prefix come before the matching band, ones
+                // that diverge above come after — trim both sides.
+                let start = keys.partition_point(|key| {
+                    key.split_point(depth, *prefix)
+                        .is_some_and(|p| key.direction(depth + p) == Direction::Left)
+                });
+                let end = keys.partition_point(|key| {
+                    key.split_point(depth, *prefix)
+                        .is_none_or(|p| key.direction(depth + p) == Direction::Left)
+                });
+                let keys = &keys[start..end];
 
                 // Split keys by direction at current depth
                 let depth = depth + prefix.bit_len();
@@ -954,8 +969,12 @@ impl<H: NodeHasher> SubTree<H> {
 
     fn merge_nodes(a: SubTreeNode, b: SubTreeNode, depth: usize) -> Result<SubTreeNode> {
         match (a, b) {
-            // If either is None, return the other
-            (SubTreeNode::None, other) | (other, SubTreeNode::None) => Ok(other),
+            // A well-formed proof never contains interior None nodes (empty
+            // roots are handled in merge()). Absorbing one here would launder
+            // an unverifiable proof into a valid-looking one.
+            (SubTreeNode::None, _) | (_, SubTreeNode::None) => {
+                Err(VerifyError::IncompleteProof.into())
+            }
 
             // Two hash nodes - if they're equal, keep one; otherwise can't merge
             (SubTreeNode::Hash(h1), SubTreeNode::Hash(h2)) => {
